@@ -88,16 +88,18 @@ export function ModelPanel() {
               {pending === model.name && <span className="model-tag">변경 중…</span>}
             </button>
             <span className="model-metrics">
-              <Metric label="호출" value={model.calls.total} />
+              <Metric label="요청" value={model.calls.total} />
               <Metric label="성공" value={model.calls.succeeded} />
               <Metric label="실패" value={model.calls.failed} tone={model.calls.failed > 0 ? 'warn' : undefined} />
-              <Metric label="토큰" value={model.tokens} />
+              <Metric label="쓴 토큰" value={model.tokens} />
+              {/* The free tier meters requests per day, not tokens — keep the
+                  unit in the label so this is not read as a token budget. */}
               <Metric
-                label="남음"
+                label="남은 요청"
                 value={model.remaining}
                 suffix={
                   model.limit !== null
-                    ? ` / ${model.limit}${model.limitSource === 'configured' ? ' (추정)' : ''}`
+                    ? ` / ${model.limit}${model.limitSource === 'configured' ? ' 추정' : ''}`
                     : ''
                 }
                 unknownHint="한도 미확인"
@@ -108,7 +110,8 @@ export function ModelPanel() {
       </ul>
 
       <p className="model-note">
-        모델을 누르면 그 모델을 먼저 시도합니다. 한도에 걸리면 나머지 모델로 자동
+        무료 한도는 <strong>하루 요청 횟수</strong> 기준이라 토큰 소비량과는 별개입니다.
+        모델을 누르면 그 모델을 먼저 시도하고, 한도에 걸리면 나머지 모델로 자동
         전환되므로 선택해도 생성이 멈추지 않습니다. “추정”은 공개 문서 기준값이고,
         Google 이 실제로 요청을 거절하면 그때 알려준 값으로 교정됩니다.
       </p>
