@@ -75,11 +75,6 @@ function nextQuotaReset(now: Date = new Date()): Date {
   return quotaDayStart(probe);
 }
 
-const EXHAUSTION_TTL_MS = (() => {
-  const raw = Number.parseFloat(process.env.CLAUDE_MEM_EXHAUSTION_TTL_HOURS ?? '');
-  const hours = Number.isFinite(raw) && raw > 0 ? raw : 3;
-  return hours * 60 * 60 * 1000;
-})();
 const MAX_LIMIT = 200;
 /** How often an open /stream connection looks for rows it has not sent yet. */
 const STREAM_POLL_MS = 3_000;
@@ -516,10 +511,11 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         // candidate list stays grey for good: the chain stops at the first
         // model that works, so a spent one at the back is never retried and
         // never earns the success that would clear it.
-        // Two ways a refusal stops meaning anything: the allowance it hit has
-        // since reset, or it is simply old enough to be worth re-testing.
-        const stale = refused !== null
-          && (refused < dayStart.getTime() || Date.now() - refused > EXHAUSTION_TTL_MS);
+        // A daily-quota refusal holds until the allowance resets — nothing
+        // else clears it. An optimistic timeout lived here before the reset
+        // schedule was known; with the real boundary in hand it would only
+        // paint models green while they are still spent.
+        const stale = refused !== null && refused < dayStart.getTime();
         const exhausted = refused !== null
           && !stale
           && (succeeded === null || refused > succeeded);
