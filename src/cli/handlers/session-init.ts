@@ -20,6 +20,8 @@ import {
   type ServerRuntimeContext,
 } from '../../services/hooks/runtime-selector.js';
 import { isServerClientError } from '../../services/hooks/server-client.js';
+import { resolveDataDir } from '../../shared/paths.js';
+import { drainServerSpool } from '../../services/hooks/server-spool.js';
 
 interface SessionInitResponse {
   sessionDbId: number;
@@ -87,6 +89,13 @@ export const sessionInitHandler: EventHandler = {
     if (runtime.runtime === 'server') {
       try {
         await startServerSession(runtime, input, sessionId, platformSource, project, prompt);
+        // That call succeeding is the evidence the server is reachable, which
+        // is when it is worth pushing anything buffered during an outage.
+        // Doing it on failure instead would pay a timeout on every prompt for
+        // as long as the server stays down.
+        void drainServerSpool(resolveDataDir(), runtime.client).catch(() => {
+          // Replay is opportunistic; the next prompt tries again.
+        });
         const serverContext = semanticInject
           ? await fetchServerContext(runtime, prompt, platformSource, settings)
           : '';

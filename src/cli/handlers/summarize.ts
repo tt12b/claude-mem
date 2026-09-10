@@ -14,6 +14,8 @@ import { shouldTrackProject } from '../../shared/should-track-project.js';
 import { resolveRuntimeContext, logServerFallback } from '../../services/hooks/runtime-selector.js';
 import type { ServerRuntimeContext } from '../../services/hooks/runtime-selector.js';
 import { isServerClientError } from '../../services/hooks/server-client.js';
+import { resolveDataDir } from '../../shared/paths.js';
+import { spoolServerEvent } from '../../services/hooks/server-spool.js';
 
 async function summarizeViaServer(
   runtime: ServerRuntimeContext,
@@ -136,6 +138,19 @@ export const summarizeHandler: EventHandler = {
             status: error.status,
             message: error.message,
             route: '/v1/sessions/end',
+          });
+          // Buffer the answer so the server's copy of the conversation is not
+          // left with only the questions once it comes back. The session id
+          // is the client-side one; the server resolves it on ingest the same
+          // way it does for a live delivery.
+          spoolServerEvent(resolveDataDir(), {
+            projectId: runtime.projectId,
+            contentSessionId: sessionId,
+            platformSource,
+            sourceType: 'hook',
+            eventType: 'assistant_message',
+            occurredAtEpoch: Date.now(),
+            payload: { last_assistant_message: lastAssistantMessage, platformSource },
           });
           // fall through to worker fallback
         } else {

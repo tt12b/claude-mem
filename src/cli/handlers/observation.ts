@@ -10,6 +10,8 @@ import { shouldTrackProject } from '../../shared/should-track-project.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
 import { resolveRuntimeContext, logServerFallback } from '../../services/hooks/runtime-selector.js';
 import { isServerClientError, type ServerRecordEventRequest } from '../../services/hooks/server-client.js';
+import { resolveDataDir } from '../../shared/paths.js';
+import { spoolServerEvent } from '../../services/hooks/server-spool.js';
 
 async function dispatchToWorker(
   input: NormalizedHookInput,
@@ -91,6 +93,11 @@ export const observationHandler: EventHandler = {
       } catch (error: unknown) {
         if (isServerClientError(error) && error.isFallbackEligible()) {
           logServerFallback(error.kind, { status: error.status, message: error.message, route: '/v1/events' });
+          // Keep the event so it can reach the server once it is back. The
+          // worker fallback below still records it locally; without this the
+          // server's copy of the conversation would have a hole for the
+          // whole outage.
+          spoolServerEvent(resolveDataDir(), event);
           // fall through to worker fallback
         } else {
           logger.error('HOOK', 'Server event failed (non-recoverable)', {
