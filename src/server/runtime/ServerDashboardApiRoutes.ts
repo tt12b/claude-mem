@@ -426,7 +426,12 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       preferredModel: preferred ?? null,
       models: names.map(name => {
         const c = callsByModel.get(name) ?? { succeeded: 0, failed: 0 };
-        const used = c.succeeded + c.failed;
+        // A 429 is a refusal — the request never ran, so it does not draw
+        // down the daily allowance. Only completed calls do. (A call that
+        // reaches the model and then fails to parse is charged and counted
+        // here as failed, so this can undercount slightly; it is far closer
+        // than charging every rejection.)
+        const used = c.succeeded;
         const measured = measuredLimits.get(name) ?? null;
         const limit = measured ?? configuredLimits.get(name) ?? null;
         return {
