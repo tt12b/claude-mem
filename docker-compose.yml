@@ -125,7 +125,7 @@ services:
       # 표시 전용. 생성은 워커가 하지만 대시보드가 어떤 provider/model 인지
       # 보여줘야 하므로 이름만 넘긴다 (API 키는 넘기지 않는다).
       CLAUDE_MEM_SERVER_PROVIDER: ${CLAUDE_MEM_SERVER_PROVIDER:-claude}
-      CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-}
+      CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-gemini-3.5-flash-lite}
       # #2558 — REDIS_URL fallback: default to the in-stack valkey service so the
       # var is not a brittle hard requirement; override CLAUDE_MEM_REDIS_URL to
       # point at an external Redis.
@@ -188,6 +188,10 @@ services:
       CLAUDE_MEM_USAGE_METERING: ${CLAUDE_MEM_USAGE_METERING:-1}
       # 관측치의 사람이 읽는 필드를 이 언어로 생성한다. 비우면 모델 기본값(영어).
       CLAUDE_MEM_OBSERVATION_LANGUAGE: ${CLAUDE_MEM_OBSERVATION_LANGUAGE:-Korean}
+      # 모델을 명시한다. 무료 티어 쿼터는 PerProjectPerModel 이라 모델마다 따로
+      # 잡히는데, `gemini-flash-latest` 는 최신 모델로 해석되어 한도가 가장 짜다
+      # (측정값: 일 20건). lite 계열이 요약에는 충분하면서 한도가 넉넉하다.
+      CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-gemini-3.5-flash-lite}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MEM_ANTHROPIC_API_KEY: ${CLAUDE_MEM_ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
