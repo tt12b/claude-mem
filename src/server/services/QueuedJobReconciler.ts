@@ -97,6 +97,11 @@ export class QueuedJobReconciler {
       const result = await this.tick();
       if (result.republished > 0) {
         logger.info('SYSTEM', 'republished queued generation jobs', result);
+      } else if (result.due > 0) {
+        // Due work that went nowhere is the one outcome worth a line: it
+        // means the queue is unreachable or the rows carry no BullMQ id,
+        // and silence here reads identical to "nothing to do".
+        logger.warn('SYSTEM', 'queued jobs are due but none could be published', result);
       }
     } catch (error) {
       logger.warn('SYSTEM', 'queued job reconciliation failed', {
