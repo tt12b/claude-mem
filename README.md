@@ -1,3 +1,205 @@
+# 여웅이 Mem
+
+`claude-mem` 을 개인 서버에서 직접 돌리는 포크. 대화 기록과 요약을
+남의 서비스가 아니라 내 Postgres 에 쌓는다.
+
+업스트림과 다른 점:
+
+- **주기 요약** — 이벤트마다 provider 를 부르지 않고 N 분마다 한 번에
+  묶어서 부른다. 무료 티어 한도가 한 세션에 소진되는 것을 막는다
+- **모델 자동 전환** — 한 모델이 한도에 걸리면 다음 후보로 넘어가고,
+  대시보드에서 모델을 직접 고를 수도 있다
+- **한글 관측치** — 요약을 한글로 생성한다
+- **한글 검색 + 의미 검색** — 조사를 떼서 검색하고, pgvector 임베딩으로
+  단어가 겹치지 않아도 뜻이 비슷하면 찾는다
+- **끊겨도 안 잃는다** — 서버가 죽으면 훅이 로컬에 쌓아뒀다 복구되면
+  다시 보내고, 큐에서 유실된 잡은 서버가 주기적으로 다시 집어넣는다
+
+---
+
+## 자체 호스팅
+
+### 1. 구성
+
+컨테이너 4개가 뜬다.
+
+| 컨테이너 | 역할 |
+|---|---|
+| `postgres` | 대화·관측치·잡 저장소. **정본** |
+| `valkey` | BullMQ 큐 (Redis 호환) |
+| `claude-mem-server` | HTTP API + 대시보드. 포트 `37877` |
+| `claude-mem-worker` | 큐를 소비해 provider 를 호출하고 요약 생성 |
+
+서버와 워커는 같은 이미지를 쓰고 역할만 다르다.
+
+### 2. 서버 띄우기
+
+```bash
+git clone https://github.com/tt12b/claude-mem.git ~/claude-mem
+cd ~/claude-mem
+cp .env.example .env   # 아래 3번 참고해서 채운다
+docker compose up -d
+```
+
+대시보드는 `http://<서버주소>:37877` 이다.
+
+### 3. `.env`
+
+`.env` 는 `docker-compose.yml` 과 **같은 디렉터리**에 둔다.
+
+**반드시 채워야 하는 값** — 비어 있으면 컨테이너가 아예 뜨지 않는다.
+
+```dotenv
+POSTGRES_USER=claudemem
+POSTGRES_PASSWORD=<임의의 긴 문자열>
+POSTGRES_DB=claudemem
+```
+
+**요약 provider** — 하나는 있어야 요약이 만들어진다.
+
+```dotenv
+# Google AI Studio 키 (무료 티어). 임베딩도 이 키를 쓴다
+GEMINI_API_KEY=<키>
+CLAUDE_MEM_SERVER_PROVIDER=gemini
+
+# 후보 모델을 콤마로 나열한다. 앞에서부터 시도하고
+# 한도에 걸리면 다음 것으로 자동 전환된다
+CLAUDE_MEM_SERVER_MODEL=gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-flash-latest
+
+# 모델별 하루 요청 한도(공개 문서 기준 추정치).
+# 실제로 429 를 받으면 그때 알려준 값으로 교정된다
+CLAUDE_MEM_MODEL_LIMITS=gemini-3.5-flash-lite=1000,gemini-3.1-flash-lite=1000,gemini-3.6-flash=250,gemini-flash-latest=20
+```
+
+**요약 주기와 언어**
+
+```dotenv
+# 이벤트 1건당 provider 1회 호출은 무료 한도를 한 세션에 소진시킨다.
+# false 로 두면 이벤트는 그대로 저장되고 아래 주기 요약이 한 번에 처리한다
+CLAUDE_MEM_GENERATE_PER_EVENT=false
+
+# 주기 요약 간격(분). 새 이벤트가 없는 세션은 잡을 만들지 않으므로
+# 유휴 상태에서는 provider 호출이 0 이다. 0 이면 비활성
+CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES=10
+
+CLAUDE_MEM_OBSERVATION_LANGUAGE=Korean
+CLAUDE_MEM_USAGE_METERING=1
+```
+
+**의미 검색(pgvector)**
+
+```dotenv
+CLAUDE_MEM_EMBEDDINGS=true
+CLAUDE_MEM_EMBEDDING_MODEL=gemini-embedding-001
+CLAUDE_MEM_EMBEDDING_INTERVAL_MINUTES=5
+```
+
+pgvector 가 없는 Postgres 로 바꿔도 서버는 그대로 뜨고 키워드 검색만
+동작한다. 켜려면 이미지가 pgvector 를 품고 있어야 한다 — 기본값이
+`pgvector/pgvector:pg17` 인 이유다.
+
+> **`postgres:17-alpine` 에서 옮겨오는 경우**
+> musl → glibc 로 텍스트 콜레이션 라이브러리가 바뀐다. 메이저 버전이
+> 같아 데이터는 그대로 읽히지만 텍스트 인덱스는 옛 콜레이션으로
+> 만들어져 있으므로 **한 번** 재작성해야 한다.
+> ```bash
+> docker compose exec postgres \
+>   sh -lc 'psql -U $POSTGRES_USER -d $POSTGRES_DB -c "REINDEX DATABASE \"$POSTGRES_DB\";"'
+> ```
+
+**이미지 / 큐 접두사**
+
+```dotenv
+CLAUDE_MEM_IMAGE=ghcr.io/tt12b/claude-mem:latest
+CLAUDE_MEM_POSTGRES_IMAGE=pgvector/pgvector:pg17
+
+# 서버와 워커가 반드시 같아야 한다. 어긋나면 잡이 큐에 쌓이기만 하고
+# 워커가 영영 소비하지 못한다
+CLAUDE_MEM_QUEUE_REDIS_PREFIX=claude_mem_37877
+```
+
+### 4. API 키 발급
+
+클라이언트(맥북 등)가 서버에 붙으려면 키가 필요하다.
+
+```bash
+docker compose exec claude-mem-server \
+  bun /opt/claude-mem/scripts/server-service.cjs server api-key create \
+  --scope events:write,sessions:write,observations:read,jobs:read,memories:read,memories:write
+```
+
+출력된 **키**와 **projectId** 를 둘 다 적어둔다. 둘 중 하나라도 빠지면
+훅이 403 을 받는다.
+
+### 5. 클라이언트(사용하는 PC) 설정
+
+플러그인을 설치하고 서버를 가리키게 한다.
+
+```bash
+# Claude Code 안에서
+/plugin marketplace add tt12b/claude-mem
+/plugin install claude-mem@claude-mem
+```
+
+`~/.claude-mem/settings.json` 또는 환경변수:
+
+```dotenv
+CLAUDE_MEM_SERVER_URL=http://<서버주소>:37877
+CLAUDE_MEM_SERVER_API_KEY=<4번에서 받은 키>
+CLAUDE_MEM_SERVER_PROJECT_ID=<4번에서 받은 projectId>
+```
+
+서버가 다른 PC 에 있으면 Tailscale 같은 것으로 붙이면 된다.
+
+### 6. 잘 붙었는지 확인
+
+```bash
+# 서버가 살아있나
+curl -s http://<서버주소>:37877/healthz
+
+# 이벤트가 들어오고 있나
+docker compose exec postgres \
+  sh -lc 'psql -U $POSTGRES_USER -d $POSTGRES_DB -c \
+  "SELECT event_type, count(*) FROM agent_events GROUP BY 1;"'
+
+# 잡이 처리되고 있나 (queued 만 쌓이면 큐 접두사 불일치를 의심한다)
+docker compose exec postgres \
+  sh -lc 'psql -U $POSTGRES_USER -d $POSTGRES_DB -c \
+  "SELECT status, count(*) FROM observation_generation_jobs GROUP BY 1;"'
+
+# 임베딩이 채워지고 있나
+docker compose exec postgres \
+  sh -lc 'psql -U $POSTGRES_USER -d $POSTGRES_DB -c \
+  "SELECT count(*) FILTER (WHERE embedding_vector IS NOT NULL), count(*) FROM observations;"'
+```
+
+### 7. 업데이트
+
+`main` 에 푸시하면 GitHub Actions 가 `ghcr.io/tt12b/claude-mem:latest`
+를 빌드한다. 서버에서는:
+
+```bash
+cd ~/claude-mem
+git pull
+docker compose pull
+docker compose up -d
+```
+
+### 8. 백업
+
+Postgres 볼륨이 전부다. 이미지를 바꾸기 전에는 특히 먼저 떠둔다.
+
+```bash
+docker compose exec -T postgres \
+  sh -lc 'pg_dump -U $POSTGRES_USER -d $POSTGRES_DB' \
+  | gzip > ~/claude-mem-backup-$(date +%Y%m%d-%H%M%S).sql.gz
+```
+
+---
+
+<details>
+<summary>업스트림(Grok Mem) 원본 README</summary>
+
 <h1 align="center">
   <br>
   <a href="https://grok-mem.ai">
@@ -456,3 +658,6 @@ open/commercial boundary.
 CMEM is a token created by a 3rd party but officially embraced by the creator of Claude-Mem (Alex Newman, @thedotmack). The token acts as a community catalyst for growth and a vehicle for bringing CMEM to the developers and knowledge workers that need it most.
 
 Official BASE CA: 0x76b1967eec0ccaeb001bbbb2b40dc4badba31ba3
+
+
+</details>
