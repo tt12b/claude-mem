@@ -71,6 +71,31 @@ function asText(value: unknown): string | null {
   return JSON.stringify(value);
 }
 
+/**
+ * ObservationCard runs these through JSON.parse (facts, concepts, files_read,
+ * files_modified), so they have to arrive as a JSON array *string* — handing
+ * it prose makes the card throw and takes the whole page down with it.
+ */
+function asJsonArrayText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return null;
+    // Already-encoded arrays pass through; anything else is a single item.
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return trimmed;
+      } catch {
+        // fall through and treat it as one plain string
+      }
+    }
+    return JSON.stringify([value]);
+  }
+  return JSON.stringify([String(value)]);
+}
+
 export interface ServerDashboardApiRoutesOptions {
   pool: PostgresPool;
 }
@@ -366,10 +391,10 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       subtitle: asText(metadata.subtitle),
       narrative: asText(metadata.narrative),
       text: asText(row.content),
-      facts: asText(metadata.facts),
-      concepts: asText(metadata.concepts),
-      files_read: asText(metadata.files_read),
-      files_modified: asText(metadata.files_modified),
+      facts: asJsonArrayText(metadata.facts),
+      concepts: asJsonArrayText(metadata.concepts),
+      files_read: asJsonArrayText(metadata.files_read),
+      files_modified: asJsonArrayText(metadata.files_modified),
       prompt_number: null,
       created_at: row.created_at,
       created_at_epoch: toEpoch(row.created_at as Date | string | null),
