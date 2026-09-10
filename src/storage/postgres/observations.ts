@@ -13,6 +13,22 @@ import {
 } from './utils.js';
 import { normalizePlatformSourceOrNull } from '../../shared/platform-source.js';
 import { buildSearchTerms } from './search-terms.js';
+import { EMBEDDING_COLUMN, toVectorLiteral, vectorSupport } from './vector-support.js';
+
+/**
+ * How far apart two vectors may be and still count as a match. Cosine
+ * distance, so 0 is identical and 1 is unrelated; 0.45 keeps paraphrases and
+ * cross-language restatements while dropping the merely topical.
+ */
+const MAX_SEMANTIC_DISTANCE = 0.45;
+
+/**
+ * Weight of the semantic score against the keyword score. The keyword side
+ * contributes up to ~2 (ts_rank plus the share of terms found literally), so
+ * 1.0 lets semantics break ties and surface a no-term-in-common hit without
+ * letting it outrank an exact match.
+ */
+const SEMANTIC_WEIGHT = 1.0;
 
 export type ObservationSourceType = 'agent_event' | 'session_summary' | 'observation_reindex' | 'manual';
 
@@ -152,17 +168,111 @@ export class PostgresObservationRepository {
     return result.rows.map(mapObservationRow);
   }
 
+  /**
+   * Rows whose embedding has not been computed yet, oldest first.
+   *
+   * Oldest first so a backlog drains in the order it accumulated; newest
+   * first would leave the tail permanently unembedded whenever the backlog
+   * grows faster than a tick can clear it.
+   */
+  async listMissingEmbeddings(input: { limit: number }): Promise<Array<{ id: string; content: string }>> {
+    const result = await this.client.query<{ id: string; content: string }>(
+      `
+        SELECT id, content FROM observations
+        WHERE ${EMBEDDING_COLUMN} IS NULL
+        ORDER BY created_at ASC
+        LIMIT $1
+      `,
+      [input.limit]
+    );
+    return result.rows;
+  }
+
+  /**
+   * Store a batch of vectors in one statement.
+   *
+   * Per-row updates would be one round trip each; at a few hundred rows of
+   * backlog that dominates the tick.
+   */
+  async setEmbeddings(entries: ReadonlyArray<{ id: string; vector: readonly number[] }>): Promise<number> {
+    if (entries.length === 0) return 0;
+    const result = await this.client.query(
+      `
+        UPDATE observations AS o
+        SET ${EMBEDDING_COLUMN} = data.vec::vector,
+            updated_at = o.updated_at
+        FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS vec) AS data
+        WHERE o.id = data.id
+      `,
+      [entries.map(e => e.id), entries.map(e => toVectorLiteral(e.vector))]
+    );
+    return result.rowCount ?? 0;
+  }
+
   async search(input: {
     projectId: string;
     teamId: string;
     query: string;
     limit?: number;
     platformSource?: string | null;
+    /**
+     * The query embedded with the same model as the stored vectors. When
+     * given, semantically close observations are returned even with no term
+     * in common; without it the search is keyword-only, exactly as before.
+     */
+    queryEmbedding?: readonly number[] | null;
   }): Promise<PostgresObservation[]> {
     const platformSource = normalizePlatformSourceOrNull(input.platformSource);
+    const params: unknown[] = [
+      input.projectId,
+      input.teamId,
+      input.query,
+      input.limit ?? 20,
+      platformSource,
+      buildSearchTerms(input.query),
+    ];
+
+    // Only reference the `vector` type when the extension actually exists —
+    // on a plain Postgres the cast itself is a syntax-level failure, not an
+    // empty result.
+    const semantic = vectorSupport() === true
+      && Array.isArray(input.queryEmbedding)
+      && input.queryEmbedding.length > 0;
+    let semanticMatch = '';
+    let semanticRank = '';
+    if (semantic) {
+      params.push(toVectorLiteral(input.queryEmbedding as readonly number[]));
+      semanticMatch = `
+            OR (
+              observations.${EMBEDDING_COLUMN} IS NOT NULL
+              AND observations.${EMBEDDING_COLUMN} <=> $7::vector < ${MAX_SEMANTIC_DISTANCE}
+            )`;
+      semanticRank = `
+            + COALESCE(
+                GREATEST(0, 1 - (observations.${EMBEDDING_COLUMN} <=> $7::vector)) * ${SEMANTIC_WEIGHT},
+                0
+              )`;
+    }
+
     const result = await this.client.query<ObservationRow>(
       `
-        SELECT observations.* FROM observations
+        -- Columns are listed one by one, not observations.*, so the 768-float
+        -- embedding never crosses the wire: nothing downstream reads it, and
+        -- at 20 rows a search it would dominate the response.
+        SELECT
+          observations.id,
+          observations.project_id,
+          observations.team_id,
+          observations.server_session_id,
+          observations.kind,
+          observations.content,
+          observations.generation_key,
+          observations.metadata,
+          observations.embedding,
+          observations.created_by_job_id,
+          observations.created_at,
+          observations.updated_at
+        FROM observations
         LEFT JOIN server_sessions
           ON server_sessions.id = observations.server_session_id
           AND server_sessions.project_id = observations.project_id
@@ -178,7 +288,7 @@ export class PostgresObservationRepository {
             OR EXISTS (
               SELECT 1 FROM unnest($6::text[]) AS term
               WHERE observations.content ILIKE '%' || term || '%'
-            )
+            )${semanticMatch}
           )
           AND (
             $5::text IS NULL
@@ -207,19 +317,12 @@ export class PostgresObservationRepository {
                 SELECT count(*)::float
                 FROM unnest($6::text[]) AS term
                 WHERE observations.content ILIKE '%' || term || '%'
-              ) / NULLIF(array_length($6::text[], 1), 0), 0)
+              ) / NULLIF(array_length($6::text[], 1), 0), 0)${semanticRank}
             DESC,
           observations.updated_at DESC
         LIMIT $4
       `,
-      [
-        input.projectId,
-        input.teamId,
-        input.query,
-        input.limit ?? 20,
-        platformSource,
-        buildSearchTerms(input.query),
-      ]
+      params
     );
     return result.rows.map(mapObservationRow);
   }

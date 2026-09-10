@@ -21,6 +21,7 @@ import {
   type PostgresPool,
 } from '../../storage/postgres/pool.js';
 import { stripTags } from '../../utils/tag-stripping.js';
+import { nextQuotaReset } from '../services/quota-day.js';
 
 // processGeneratedResponse owns the full "we got XML from a provider →
 // persist + link + advance outbox" pipeline. Every side-effect runs inside
@@ -173,7 +174,9 @@ export async function markGenerationFailed(input: MarkGenerationFailedInput): Pr
       teamId: fresh.teamId,
       status: target,
       lastError: { reason: input.reason, classification: input.classification ?? null },
-      ...(canRetry ? { nextAttemptAt: new Date(Date.now() + retryDelayMs(fresh.attempts)) } : {}),
+      ...(canRetry
+        ? { nextAttemptAt: nextAttemptFor(input.classification, fresh.attempts) }
+        : {}),
     });
 
     await eventsLogRepo.append({
@@ -511,4 +514,23 @@ function retryDelayMs(attempts: number): number {
   // Exponential backoff: 5s, 25s, 125s, capped at 10 minutes.
   const base = 5000 * Math.pow(5, Math.max(0, attempts));
   return Math.min(base, 10 * 60 * 1000);
+}
+
+/**
+ * When to try again.
+ *
+ * Exponential backoff answers "the provider hiccuped"; it does not answer "we
+ * have used up today's requests". A spent daily allowance comes back at one
+ * specific instant, and retrying before it just spends attempts on refusals —
+ * with max_attempts of 3 and a 10-minute ceiling, a quota failure would
+ * exhaust every attempt within half an hour and the job would die for the
+ * day. So a quota failure waits for the reset instead.
+ */
+function nextAttemptFor(classification: string | undefined, attempts: number): Date {
+  if (classification === 'quota_exhausted' || classification === 'insufficient_quota') {
+    // A minute past the boundary: the provider's clock and ours need not
+    // agree to the second, and arriving early wastes the attempt.
+    return new Date(nextQuotaReset().getTime() + 60_000);
+  }
+  return new Date(Date.now() + retryDelayMs(attempts));
 }

@@ -29,6 +29,7 @@ import type { RouteHandler } from '../../services/server/Server.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
 import { PostgresServerSettingsRepository, PREFERRED_MODEL_KEY } from '../../storage/postgres/server-settings.js';
 import { logger } from '../../utils/logger.js';
+import { QUOTA_TIMEZONE, nextQuotaReset, quotaDayStart } from '../services/quota-day.js';
 
 const DEFAULT_LIMIT = 50;
 /**
@@ -40,42 +41,8 @@ const DEFAULT_LIMIT = 50;
  * early the panel says so instead of lying for hours. Being wrong in the
  * optimistic direction costs one refused request, which draws down nothing.
  */
-/**
- * Google resets request-per-day quotas at midnight Pacific
- * (https://ai.google.dev/gemini-api/docs/rate-limits), so "used today" has to
- * be counted from that boundary — a rolling 24h window would keep charging
- * for calls the provider has already forgiven.
- *
- * Derived through Intl rather than a fixed offset so the DST switch is
- * handled without a timezone library.
- */
-const QUOTA_TIMEZONE = process.env.CLAUDE_MEM_QUOTA_TIMEZONE ?? 'America/Los_Angeles';
-
-function msSinceLocalMidnight(at: Date): number {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: QUOTA_TIMEZONE,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).formatToParts(at);
-  const get = (type: string) => Number(parts.find(part => part.type === type)?.value ?? '0');
-  // en-GB renders midnight as 24 in some runtimes; normalise it to 0.
-  const hour = get('hour') % 24;
-  return ((hour * 60 + get('minute')) * 60 + get('second')) * 1000 + at.getMilliseconds();
-}
-
-/** Start of the current quota day, as an instant. */
-function quotaDayStart(now: Date = new Date()): Date {
-  return new Date(now.getTime() - msSinceLocalMidnight(now));
-}
-
-/** The next reset boundary. Stepping 36h forward lands safely inside the
- *  following local day even when that day is 23 or 25 hours long. */
-function nextQuotaReset(now: Date = new Date()): Date {
-  const probe = new Date(quotaDayStart(now).getTime() + 36 * 60 * 60 * 1000);
-  return quotaDayStart(probe);
-}
+/* The quota-day boundary lives in ../services/quota-day.js — the retry
+ * scheduler parks jobs on the same instant this panel counts down to. */
 
 const MAX_LIMIT = 200;
 /** How often an open /stream connection looks for rows it has not sent yet. */

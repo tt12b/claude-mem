@@ -53,7 +53,15 @@
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector's image is stock Postgres 17 with the `vector` extension
+    # already built in — semantic search needs the extension, and building it
+    # into a custom image would mean maintaining a second Dockerfile.
+    #
+    # Switching here from `postgres:17-alpine` changes the C library behind
+    # text collation (musl -> glibc). Same major version, so the data
+    # directory is read as-is, but text btree indexes were built under the
+    # old collation: run `REINDEX DATABASE <db>;` once after the switch.
+    image: ${CLAUDE_MEM_POSTGRES_IMAGE:-pgvector/pgvector:pg17}
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
@@ -122,6 +130,14 @@ services:
       # 주기 요약 간격(분). 새 이벤트가 없는 세션은 잡을 만들지 않으므로
       # 유휴 상태에서는 provider 호출이 0이다. 0 이면 주기 요약 비활성.
       CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES: ${CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES:-10}
+      # 의미 검색용 임베딩. 서버가 pgvector 를 감지하고 Gemini 키가 있을 때만
+      # 켜진다 — 둘 중 하나라도 없으면 키워드 검색만 그대로 동작한다.
+      # 임베딩은 관찰이 저장된 뒤 이 간격마다 뒤에서 채운다. 0 이면 비활성.
+      CLAUDE_MEM_EMBEDDINGS: ${CLAUDE_MEM_EMBEDDINGS:-true}
+      CLAUDE_MEM_EMBEDDING_INTERVAL_MINUTES: ${CLAUDE_MEM_EMBEDDING_INTERVAL_MINUTES:-5}
+      CLAUDE_MEM_EMBEDDING_MODEL: ${CLAUDE_MEM_EMBEDDING_MODEL:-text-embedding-004}
+      # 임베딩은 서버 프로세스가 직접 호출하므로 서버에도 키가 필요하다.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # 표시 전용. 생성은 워커가 하지만 대시보드가 어떤 provider/model 인지
       # 보여줘야 하므로 이름만 넘긴다 (API 키는 넘기지 않는다).
       # 모델 목록은 워커와 반드시 같아야 한다 — /api/models 가 이 값을 후보

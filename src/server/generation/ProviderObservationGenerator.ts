@@ -192,8 +192,17 @@ export class ProviderObservationGenerator {
       return await this.generateAndPersist(job, payload, fresh, correlationId, payloadRequestId);
     } catch (error) {
       const classified = error instanceof ServerClassifiedProviderError ? error : null;
+      // A spent quota is not a broken job — it is a job that arrived on the
+      // wrong side of a daily boundary. Treating it as terminal is what left
+      // 141 session summaries permanently unwritten here: every one of them
+      // died on its first attempt with two attempts still unused, and the
+      // conversation they described was never recorded on the server.
+      // markGenerationFailed parks these until the allowance returns.
       const retryable = classified
-        ? classified.kind === 'transient' || classified.kind === 'rate_limit'
+        ? classified.kind === 'transient'
+          || classified.kind === 'rate_limit'
+          || classified.kind === 'quota_exhausted'
+          || classified.kind === 'insufficient_quota'
         : false;
       await markGenerationFailed({
         pool: this.options.pool,

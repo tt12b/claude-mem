@@ -25,6 +25,7 @@ import { requestIdMiddleware } from '../../middleware/request-id.js';
 import type { ActiveServerQueueManager } from '../../runtime/ActiveServerQueueManager.js';
 import type { ServerQueueManager } from '../../runtime/types.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { embedSearchQuery } from '../../generation/embeddings/query-embedding.js';
 import { createRecallMcpServer, type RecallBackend } from '../../mcp/recall-mcp-server.js';
 import { requireRateLimit, requireMonthlyQuota } from '../../middleware/rate-limit.js';
 import { meterRequests } from '../../middleware/usage-metering.js';
@@ -152,6 +153,15 @@ export class ServerV1PostgresRoutes implements RouteHandler {
     return this.resolveQueue('summary');
   }
 
+  /**
+   * Queue for a job of the given source type, for the requeue scheduler.
+   * Same lane mapping the operator-retry path uses, so a job republished by
+   * the timer lands exactly where a hand-retried one would.
+   */
+  resolveQueueForSourceType(sourceType: string): ReturnType<ActiveServerQueueManager['getQueue']> | null {
+    return this.resolveQueue(sourceType === 'session_summary' ? 'summary' : 'event');
+  }
+
   setupRoutes(app: Application): void {
     // Phase 12 — request_id middleware MUST run before auth so the audit log
     // can carry a stable correlation id across "rejected at auth" and
@@ -256,12 +266,14 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         res.status(400).json({ error: 'ValidationError', issues: parsedQuery.error.issues });
         return;
       }
+      const wait = parsedQuery.data.wait === 'true';
       // An explicit ?generate= wins; otherwise fall back to the deployment
       // default so CLAUDE_MEM_GENERATE_PER_EVENT=false actually batches.
+      // ?wait=true is itself a request for the job descriptor, so it opts in:
+      // waiting for a job that was never queued can only ever return null.
       const generate = parsedQuery.data.generate !== undefined
         ? parsedQuery.data.generate !== 'false'
-        : perEventGenerationEnabled();
-      const wait = parsedQuery.data.wait === 'true';
+        : wait || perEventGenerationEnabled();
 
       const result = CreateAgentEventSchema.safeParse(req.body);
       if (!result.success) {
@@ -338,12 +350,14 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         res.status(400).json({ error: 'ValidationError', issues: parsedQuery.error.issues });
         return;
       }
+      const wait = parsedQuery.data.wait === 'true';
       // An explicit ?generate= wins; otherwise fall back to the deployment
       // default so CLAUDE_MEM_GENERATE_PER_EVENT=false actually batches.
+      // ?wait=true is itself a request for the job descriptor, so it opts in:
+      // waiting for a job that was never queued can only ever return null.
       const generate = parsedQuery.data.generate !== undefined
         ? parsedQuery.data.generate !== 'false'
-        : perEventGenerationEnabled();
-      const wait = parsedQuery.data.wait === 'true';
+        : wait || perEventGenerationEnabled();
 
       const batchSchema = z.array(CreateAgentEventSchema).min(1).max(500);
       const result = batchSchema.safeParse(req.body);
@@ -947,6 +961,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 20,
             platformSource,
+            queryEmbedding: await embedSearchQuery(body.query),
           });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
@@ -993,6 +1008,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 10,
             platformSource,
+            queryEmbedding: await embedSearchQuery(body.query),
           });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
@@ -1039,7 +1055,10 @@ export class ServerV1PostgresRoutes implements RouteHandler {
       const backend: RecallBackend = {
         search: async ({ projectId, query, limit }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.search({ projectId, teamId, query, limit });
+          const rows = await repo.search({
+            projectId, teamId, query, limit,
+            queryEmbedding: await embedSearchQuery(query),
+          });
           // Audit the read, same as POST /v1/search — the MCP path is no exception.
           await this.auditWrite(req, 'observation.read', null, projectId, {
             mode: 'search', via: 'mcp', query, limit,
@@ -1049,7 +1068,10 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         },
         context: async ({ projectId, query, limit }) => {
           assertProjectAllowed(projectId);
-          const rows = await repo.search({ projectId, teamId, query, limit });
+          const rows = await repo.search({
+            projectId, teamId, query, limit,
+            queryEmbedding: await embedSearchQuery(query),
+          });
           await this.auditWrite(req, 'observation.read', null, projectId, {
             mode: 'context', via: 'mcp', query, limit,
             resultCount: rows.length, observationIds: rows.map(o => o.id),

@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger.js';
 import { ModeManager } from '../../services/domain/ModeManager.js';
 import { getSharedPostgresPool, SERVER_POSTGRES_SCHEMA_VERSION } from '../../storage/postgres/index.js';
 import { bootstrapServerPostgresSchema } from '../../storage/postgres/schema.js';
+import { ensureVectorSupport } from '../../storage/postgres/vector-support.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
 import { getRedisQueueConfig } from '../queue/redis-config.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
@@ -346,6 +347,10 @@ async function initializePostgres(pool: PostgresPool, bootstrapSchema: boolean):
   }
 
   await bootstrapServerPostgresSchema(pool);
+  // Probed after the main migration and outside its transaction: pgvector is
+  // an optional extension, and a Postgres without it must still finish
+  // bootstrapping with keyword search intact.
+  await ensureVectorSupport(pool);
   const result = await pool.query(
     `
       SELECT version, applied_at

@@ -161,6 +161,33 @@ export class PostgresObservationGenerationJobRepository {
     return row ? mapJobRow(row) : null;
   }
 
+  /**
+   * Jobs sitting in `queued` whose turn has come.
+   *
+   * `queued` means "Postgres says this should run"; it does not mean BullMQ
+   * has it. A row lands here whenever publishing failed, the process died
+   * between the insert and the publish, or a retryable failure sent the job
+   * back — and without something sweeping this set, those jobs wait forever.
+   *
+   * `locked_at IS NULL` keeps a job that a worker is actively holding out of
+   * the sweep, and the `next_attempt_at` filter is what makes a quota-parked
+   * job stay parked until its allowance returns.
+   */
+  async listDueQueued(input: { limit: number }): Promise<PostgresObservationGenerationJob[]> {
+    const result = await this.client.query<JobRow>(
+      `
+        SELECT * FROM observation_generation_jobs
+        WHERE status = 'queued'
+          AND locked_at IS NULL
+          AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+        ORDER BY COALESCE(next_attempt_at, created_at) ASC
+        LIMIT $1
+      `,
+      [input.limit]
+    );
+    return result.rows.map(mapJobRow);
+  }
+
   async transitionStatus(input: {
     id: string;
     projectId: string;

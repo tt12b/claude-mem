@@ -25,6 +25,9 @@ import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ServerViewerRoutes } from './ServerViewerRoutes.js';
 import { ServerDashboardApiRoutes } from './ServerDashboardApiRoutes.js';
 import { PeriodicSummaryScheduler } from '../services/PeriodicSummaryScheduler.js';
+import { ObservationEmbeddingScheduler } from '../services/ObservationEmbeddingScheduler.js';
+import { QueuedJobReconciler } from '../services/QueuedJobReconciler.js';
+import { resolveEmbeddingProvider } from '../generation/embeddings/GeminiEmbeddingProvider.js';
 import type { ServerServiceGraph, ServerQueueLaneMetric } from './types.js';
 
 // Phase 1d retains the persisted runtime literal `'server-beta'`. Renaming the
@@ -116,6 +119,8 @@ export class ServerService {
   private server: Server | null = null;
   private stopping = false;
   private summaryScheduler: PeriodicSummaryScheduler | null = null;
+  private embeddingScheduler: ObservationEmbeddingScheduler | null = null;
+  private queuedJobReconciler: QueuedJobReconciler | null = null;
 
   constructor(options: ServerServiceOptions) {
     this.graph = options.graph;
@@ -234,6 +239,27 @@ export class ServerService {
     });
     this.summaryScheduler.start();
 
+    // Republish jobs Postgres considers due but BullMQ never received —
+    // failed publishes, crashes between insert and publish, and every
+    // retryable failure, which without this sweep never ran a second time.
+    this.queuedJobReconciler = new QueuedJobReconciler({
+      pool: this.graph.postgres.pool,
+      resolveQueue: sourceType => v1Routes.resolveQueueForSourceType(sourceType) as never,
+    });
+    this.queuedJobReconciler.start();
+
+    // Semantic search. Only starts when both halves are present — pgvector
+    // to store the vectors and a provider to produce them — so a plain
+    // Postgres or a keyless deployment simply keeps keyword search.
+    const embeddingProvider = resolveEmbeddingProvider();
+    if (embeddingProvider) {
+      this.embeddingScheduler = new ObservationEmbeddingScheduler({
+        pool: this.graph.postgres.pool,
+        provider: embeddingProvider,
+      });
+      this.embeddingScheduler.start();
+    }
+
     await server.listen(this.requestedPort, this.host);
     this.server = server;
     this.boundPort = resolveBoundPort(server) ?? this.requestedPort;
@@ -250,6 +276,10 @@ export class ServerService {
     this.stopping = true;
     this.summaryScheduler?.stop();
     this.summaryScheduler = null;
+    this.embeddingScheduler?.stop();
+    this.embeddingScheduler = null;
+    this.queuedJobReconciler?.stop();
+    this.queuedJobReconciler = null;
     try {
       if (this.server) {
         try {
