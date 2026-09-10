@@ -184,6 +184,8 @@ services:
       # CLAUDE_MEM_ANTHROPIC_API_KEY) is required for real generation; the
       # worker stays running but never produces observations without one.
       CLAUDE_MEM_SERVER_PROVIDER: ${CLAUDE_MEM_SERVER_PROVIDER:-claude}
+      # 토큰 소비량 기록(opt-in). 대시보드의 /api/usage 가 이 값으로 채워진다.
+      CLAUDE_MEM_USAGE_METERING: ${CLAUDE_MEM_USAGE_METERING:-1}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MEM_ANTHROPIC_API_KEY: ${CLAUDE_MEM_ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
