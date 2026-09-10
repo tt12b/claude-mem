@@ -73,6 +73,10 @@ export interface StreamEvent {
 export interface ModelReport {
   windowDays: number;
   provider: string | null;
+  /** Counts are metered from this instant — the provider's own reset point. */
+  quotaDayStartEpoch: number;
+  quotaResetsAtEpoch: number;
+  quotaTimezone: string;
   activeModel: string | null;
   /** What the operator asked to try first; differs from active when spent. */
   preferredModel: string | null;

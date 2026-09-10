@@ -38,6 +38,43 @@ const DEFAULT_LIMIT = 50;
  * early the panel says so instead of lying for hours. Being wrong in the
  * optimistic direction costs one refused request, which draws down nothing.
  */
+/**
+ * Google resets request-per-day quotas at midnight Pacific
+ * (https://ai.google.dev/gemini-api/docs/rate-limits), so "used today" has to
+ * be counted from that boundary — a rolling 24h window would keep charging
+ * for calls the provider has already forgiven.
+ *
+ * Derived through Intl rather than a fixed offset so the DST switch is
+ * handled without a timezone library.
+ */
+const QUOTA_TIMEZONE = process.env.CLAUDE_MEM_QUOTA_TIMEZONE ?? 'America/Los_Angeles';
+
+function msSinceLocalMidnight(at: Date): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: QUOTA_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(at);
+  const get = (type: string) => Number(parts.find(part => part.type === type)?.value ?? '0');
+  // en-GB renders midnight as 24 in some runtimes; normalise it to 0.
+  const hour = get('hour') % 24;
+  return ((hour * 60 + get('minute')) * 60 + get('second')) * 1000 + at.getMilliseconds();
+}
+
+/** Start of the current quota day, as an instant. */
+function quotaDayStart(now: Date = new Date()): Date {
+  return new Date(now.getTime() - msSinceLocalMidnight(now));
+}
+
+/** The next reset boundary. Stepping 36h forward lands safely inside the
+ *  following local day even when that day is 23 or 25 hours long. */
+function nextQuotaReset(now: Date = new Date()): Date {
+  const probe = new Date(quotaDayStart(now).getTime() + 36 * 60 * 60 * 1000);
+  return quotaDayStart(probe);
+}
+
 const EXHAUSTION_TTL_MS = (() => {
   const raw = Number.parseFloat(process.env.CLAUDE_MEM_EXHAUSTION_TTL_HOURS ?? '');
   const hours = Number.isFinite(raw) && raw > 0 ? raw : 3;
@@ -358,13 +395,17 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       .map(entry => entry.trim())
       .filter(entry => entry.length > 0);
 
+    // Consumption is metered per quota day, not per display window: the
+    // dashboard can show a week of history while "remaining" must still be
+    // measured from the last midnight-Pacific reset.
+    const dayStart = quotaDayStart();
     const [calls, tokens, active, limits] = await Promise.all([
       this.options.pool.query<{ model: string | null; event_type: string; count: string }>(
         `SELECT details->>'model' AS model, event_type, count(*)::text AS count
            FROM observation_generation_job_events
           WHERE event_type IN ('completed', 'failed') AND created_at >= $1
           GROUP BY 1, 2`,
-        [since],
+        [dayStart],
       ),
       this.options.pool.query<{ model: string | null; total: string }>(
         `SELECT metadata->>'model' AS model, COALESCE(sum(quantity), 0)::text AS total
@@ -452,6 +493,11 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     res.json({
       windowDays: days,
       provider: process.env.CLAUDE_MEM_SERVER_PROVIDER ?? null,
+      // Counts below are for the current quota day, which is what the
+      // provider itself meters against.
+      quotaDayStartEpoch: dayStart.getTime(),
+      quotaResetsAtEpoch: nextQuotaReset().getTime(),
+      quotaTimezone: QUOTA_TIMEZONE,
       activeModel,
       preferredModel: preferred ?? null,
       models: names.map(name => {
@@ -470,7 +516,10 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         // candidate list stays grey for good: the chain stops at the first
         // model that works, so a spent one at the back is never retried and
         // never earns the success that would clear it.
-        const stale = refused !== null && Date.now() - refused > EXHAUSTION_TTL_MS;
+        // Two ways a refusal stops meaning anything: the allowance it hit has
+        // since reset, or it is simply old enough to be worth re-testing.
+        const stale = refused !== null
+          && (refused < dayStart.getTime() || Date.now() - refused > EXHAUSTION_TTL_MS);
         const exhausted = refused !== null
           && !stale
           && (succeeded === null || refused > succeeded);

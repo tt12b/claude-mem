@@ -73,7 +73,7 @@ export function ModelPanel() {
     <CollapsiblePanel storageKey="cm.panel.models" title="요약 모델" summary={summary}>
     <div className="model-panel">
       <div className="model-header">
-        <span className="model-title">최근 {report.windowDays}일</span>
+        <span className="model-title">오늘 사용량 · {resetLabel(report.quotaResetsAtEpoch)} 초기화</span>
         <span className="model-provider">{report.provider ?? '미설정'}</span>
       </div>
 
@@ -134,9 +134,9 @@ export function ModelPanel() {
       <p className="model-note">
         <strong>초록</strong>은 지금 쓸 수 있는 모델, <strong>회색</strong>은 한도가
         소진된 모델, <strong>파랑</strong>은 먼저 시도하도록 고른 모델입니다. 한도
-        초기화 시각은 Google 이 알려주지 않으므로, 다시 성공하거나 마지막 거절로부터
-        일정 시간이 지나면 초록으로 돌아옵니다. 아직 소진 상태라면 다음 시도에서
-        곧바로 회색으로 되돌아옵니다. 무료 한도는 <strong>하루 요청 횟수</strong> 기준이라 토큰 소비량과는 별개입니다.
+        사용량은 Google 의 초기화 시점(태평양 시간 자정)부터 셉니다. 회색은 초기화되거나
+        다시 성공하면 초록으로 돌아오고, 아직 소진 상태라면 다음 시도에서 곧바로
+        회색으로 되돌아옵니다. 무료 한도는 <strong>하루 요청 횟수</strong> 기준이라 토큰 소비량과는 별개입니다.
         모델을 누르면 그 모델을 먼저 시도하고, 한도에 걸리면 나머지 모델로 자동
         전환되므로 선택해도 생성이 멈추지 않습니다. “추정”은 공개 문서 기준값이고,
         Google 이 실제로 요청을 거절하면 그때 알려준 값으로 교정됩니다.
@@ -144,6 +144,19 @@ export function ModelPanel() {
     </div>
     </CollapsiblePanel>
   );
+}
+
+/**
+ * When the daily allowance next resets, in the reader's own clock. Google
+ * meters at midnight Pacific, which is rarely a round hour locally, so
+ * showing the converted time beats naming a timezone the reader has to
+ * convert themselves.
+ */
+function resetLabel(epoch: number): string {
+  const at = new Date(epoch);
+  const hours = Math.max(0, Math.round((epoch - Date.now()) / 3_600_000));
+  const clock = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return `${clock} (${hours}시간 후)`;
 }
 
 /** Rough age of a refusal, so a stale grey row is recognisable as stale. */
