@@ -124,8 +124,10 @@ services:
       CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES: ${CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES:-10}
       # 표시 전용. 생성은 워커가 하지만 대시보드가 어떤 provider/model 인지
       # 보여줘야 하므로 이름만 넘긴다 (API 키는 넘기지 않는다).
+      # 모델 목록은 워커와 반드시 같아야 한다 — /api/models 가 이 값을 후보
+      # 목록으로 그대로 보여주므로, 어긋나면 대시보드가 실제와 다른 걸 말한다.
       CLAUDE_MEM_SERVER_PROVIDER: ${CLAUDE_MEM_SERVER_PROVIDER:-claude}
-      CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-gemini-3.5-flash-lite}
+      CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-flash-latest}
       # #2558 — REDIS_URL fallback: default to the in-stack valkey service so the
       # var is not a brittle hard requirement; override CLAUDE_MEM_REDIS_URL to
       # point at an external Redis.
