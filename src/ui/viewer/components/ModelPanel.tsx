@@ -101,7 +101,11 @@ export function ModelPanel() {
               <span className="model-dot" aria-hidden="true">●</span>
               {model.name}
               {model.preferred && <span className="model-tag model-tag-pick">선택됨</span>}
-              {model.status === 'exhausted' && <span className="model-tag model-tag-out">한도 소진</span>}
+              {model.status === 'exhausted' && (
+                <span className="model-tag model-tag-out">
+                  한도 소진{model.exhaustedAtEpoch !== null ? ` · ${sinceLabel(model.exhaustedAtEpoch)}` : ''}
+                </span>
+              )}
               {!model.configured && <span className="model-tag">목록에서 제거됨</span>}
               {pending === model.name && <span className="model-tag">변경 중…</span>}
             </button>
@@ -139,6 +143,14 @@ export function ModelPanel() {
     </div>
     </CollapsiblePanel>
   );
+}
+
+/** Rough age of a refusal, so a stale grey row is recognisable as stale. */
+function sinceLabel(epoch: number): string {
+  const minutes = Math.max(0, Math.round((Date.now() - epoch) / 60_000));
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}시간 전`;
 }
 
 function Metric({
