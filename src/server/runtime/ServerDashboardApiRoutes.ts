@@ -82,6 +82,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     app.get('/api/observations', this.wrap(this.handleObservations));
     app.get('/api/summaries', this.wrap(this.handleSummaries));
     app.get('/api/prompts', this.wrap(this.handlePrompts));
+    app.get('/api/messages', this.wrap(this.handleMessages));
     app.get('/api/projects', this.wrap(this.handleProjects));
     app.get('/api/settings', this.wrap(this.handleSettings));
     app.get('/api/usage', this.wrap(this.handleUsage));
@@ -126,6 +127,18 @@ export class ServerDashboardApiRoutes implements RouteHandler {
   private async handlePrompts(req: Request, res: Response): Promise<void> {
     const { offset, limit, project } = parsePageQuery(req);
     const rows = await this.queryPrompts({ offset, limit: limit + 1, project });
+    res.json(this.page(rows, limit));
+  }
+
+  private async handleMessages(req: Request, res: Response): Promise<void> {
+    const { offset, limit, project } = parsePageQuery(req);
+    const rows = await this.queryAgentEventText({
+      offset,
+      limit: limit + 1,
+      project,
+      eventType: 'assistant_message',
+      payloadKey: 'last_assistant_message',
+    });
     res.json(this.page(rows, limit));
   }
 
@@ -277,7 +290,24 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     project: string | null;
     sinceEpoch?: number;
   }): Promise<Record<string, unknown>[]> {
-    const params: unknown[] = [input.limit, input.offset];
+    return this.queryAgentEventText({ ...input, eventType: 'user_prompt', payloadKey: 'prompt' });
+  }
+
+  /**
+   * Conversation turns live in agent_events, one row per side: the question
+   * under `user_prompt` (payload.prompt) and the answer under
+   * `assistant_message` (payload.last_assistant_message). Both map onto the
+   * viewer's UserPrompt shape, which is all the feed needs.
+   */
+  private async queryAgentEventText(input: {
+    offset: number;
+    limit: number;
+    project: string | null;
+    eventType: string;
+    payloadKey: string;
+    sinceEpoch?: number;
+  }): Promise<Record<string, unknown>[]> {
+    const params: unknown[] = [input.limit, input.offset, input.eventType];
     let projectClause = '';
     if (input.project) {
       params.push(input.project);
@@ -297,7 +327,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         FROM agent_events e
         LEFT JOIN server_sessions s ON s.id = e.server_session_id
         LEFT JOIN projects p ON p.id = e.project_id
-        WHERE e.event_type = 'user_prompt'
+        WHERE e.event_type = $3
           ${projectClause}
           ${sinceClause}
         ORDER BY e.occurred_at DESC
@@ -306,7 +336,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       params,
     );
 
-    return result.rows.map(row => this.toPrompt(row));
+    return result.rows.map(row => this.toPrompt(row, input.payloadKey));
   }
 
   private async listProjects(): Promise<string[]> {
@@ -362,7 +392,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     };
   }
 
-  private toPrompt(row: Record<string, unknown>): Record<string, unknown> {
+  private toPrompt(row: Record<string, unknown>, payloadKey = 'prompt'): Record<string, unknown> {
     const payload = (row.payload ?? {}) as Record<string, unknown>;
     return {
       id: row.id,
@@ -370,7 +400,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       project: row.project_label ?? 'unknown',
       platform_source: row.platform_source ?? 'claude-code',
       prompt_number: 0,
-      prompt_text: asText(payload.prompt) ?? '',
+      prompt_text: asText(payload[payloadKey]) ?? '',
       created_at_epoch: toEpoch(row.occurred_at as Date | string | null),
     };
   }
@@ -406,14 +436,19 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       const since = watermark;
       const nextWatermark = Date.now();
       try {
-        const [observations, summaries, prompts] = await Promise.all([
+        const [observations, summaries, prompts, messages] = await Promise.all([
           this.queryObservations({ offset: 0, limit: MAX_LIMIT, project: null, summaries: false, sinceEpoch: since }),
           this.queryObservations({ offset: 0, limit: MAX_LIMIT, project: null, summaries: true, sinceEpoch: since }),
           this.queryPrompts({ offset: 0, limit: MAX_LIMIT, project: null, sinceEpoch: since }),
+          this.queryAgentEventText({
+            offset: 0, limit: MAX_LIMIT, project: null, sinceEpoch: since,
+            eventType: 'assistant_message', payloadKey: 'last_assistant_message',
+          }),
         ]);
         for (const observation of observations.reverse()) send({ type: 'new_observation', observation });
         for (const summary of summaries.reverse()) send({ type: 'new_summary', summary });
         for (const prompt of prompts.reverse()) send({ type: 'new_prompt', prompt });
+        for (const message of messages.reverse()) send({ type: 'new_message', message });
         watermark = nextWatermark;
       } catch (error) {
         logger.warn('SYSTEM', 'dashboard stream poll failed', {

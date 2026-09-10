@@ -1110,6 +1110,108 @@
       color: var(--color-prompt-badge-text);
     }
 
+    /* Assistant turns. Mirrors .prompt-card so a question and its answer read
+       as a pair, distinguished by the accent rather than by layout. */
+    .message-card {
+      border-color: var(--color-border);
+      background: var(--color-bg-elevated, var(--color-bg-card));
+    }
+
+    .message-card .card-type {
+      background: var(--color-accent-muted, rgba(88, 166, 255, 0.15));
+      color: var(--color-accent, #58a6ff);
+    }
+
+    .message-card .card-content {
+      white-space: pre-wrap;
+    }
+
+    /* Provider usage strip. Sits above the feed: consumption, not headroom —
+       Gemini exposes no quota-remaining read for an AI Studio key. */
+    .usage-panel {
+      margin: 12px auto;
+      padding: 12px 16px;
+      max-width: var(--feed-max-width, 900px);
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      background: var(--color-bg-card);
+      font-size: 13px;
+    }
+
+    .usage-panel-error {
+      color: var(--color-text-muted);
+    }
+
+    .usage-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .usage-title {
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .usage-provider {
+      color: var(--color-text-muted);
+      font-size: 12px;
+    }
+
+    .usage-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    .usage-stat {
+      display: flex;
+      flex-direction: column;
+      min-width: 72px;
+    }
+
+    .usage-stat-value {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--color-text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .usage-stat-warn .usage-stat-value {
+      color: var(--color-warning, #d29922);
+    }
+
+    .usage-stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--color-text-muted);
+    }
+
+    .usage-reasons {
+      list-style: none;
+      margin: 10px 0 0;
+      padding: 8px 0 0;
+      border-top: 1px solid var(--color-border);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 18px;
+    }
+
+    .usage-reasons li {
+      display: flex;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
+
+    .usage-reason-count {
+      font-variant-numeric: tabular-nums;
+      color: var(--color-text);
+    }
+
     /* Welcome modal — first-launch + reusable as help via the ? button.
        Layout strategy: desktop-first, fluid type via clamp(), and squares
        built with the padding-bottom:100% trick (percentage padding resolves

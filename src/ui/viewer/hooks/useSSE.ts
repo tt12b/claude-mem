@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Observation, Summary, UserPrompt, StreamEvent } from '../types';
+import { Observation, Summary, UserPrompt, AssistantMessage, StreamEvent } from '../types';
 import { API_ENDPOINTS } from '../constants/api';
 import { TIMING } from '../constants/timing';
 
@@ -7,6 +7,7 @@ export function useSSE() {
   const [observations, setObservations] = useState<Observation[]>([]);
   const [summaries, setSummaries] = useState<Summary[]>([]);
   const [prompts, setPrompts] = useState<UserPrompt[]>([]);
+  const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [queueDepth, setQueueDepth] = useState(0);
@@ -79,6 +80,14 @@ export function useSSE() {
             }
             break;
 
+          case 'new_message':
+            if (data.message) {
+              console.log('[SSE] New assistant message:', data.message.id);
+              addProjectIfNew(data.message.project);
+              setMessages(prev => [data.message!, ...prev]);
+            }
+            break;
+
           case 'processing_status':
             if (typeof data.isProcessing === 'boolean') {
               console.log('[SSE] Processing status:', data.isProcessing, 'Queue depth:', data.queueDepth);
@@ -106,6 +115,7 @@ export function useSSE() {
     observations,
     summaries,
     prompts,
+    messages,
     projects,
     isProcessing,
     queueDepth

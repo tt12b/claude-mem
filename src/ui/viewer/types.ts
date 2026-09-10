@@ -41,22 +41,43 @@ export interface UserPrompt {
   created_at_epoch: number;
 }
 
+/**
+ * An assistant turn. The server stores it as an `assistant_message`
+ * agent_event and serves it in the same shape as a prompt, so the feed can
+ * treat both sides of a conversation identically.
+ */
+export type AssistantMessage = UserPrompt;
+
 export type FeedItem =
   | (Observation & { itemType: 'observation' })
   | (Summary & { itemType: 'summary' })
-  | (UserPrompt & { itemType: 'prompt' });
+  | (UserPrompt & { itemType: 'prompt' })
+  | (AssistantMessage & { itemType: 'message' });
 
 export interface StreamEvent {
-  type: 'initial_load' | 'new_observation' | 'new_summary' | 'new_prompt' | 'processing_status';
+  type: 'initial_load' | 'new_observation' | 'new_summary' | 'new_prompt' | 'new_message' | 'processing_status';
   observations?: Observation[];
   summaries?: Summary[];
   prompts?: UserPrompt[];
+  messages?: AssistantMessage[];
   projects?: string[];
   observation?: Observation;
   summary?: Summary;
   prompt?: UserPrompt;
+  message?: AssistantMessage;
   isProcessing?: boolean;
   queueDepth?: number;
+}
+
+/** Response shape of /api/usage — provider spend for the current window. */
+export interface UsageReport {
+  windowDays: number;
+  since: string;
+  provider: string | null;
+  calls: { total: number; succeeded: number; failed: number };
+  tokens: Array<{ provider: string | null; model: string | null; total: number }>;
+  jobs: Record<string, number>;
+  failureReasons: Array<{ classification: string; count: number }>;
 }
 
 export interface ProjectCatalog {

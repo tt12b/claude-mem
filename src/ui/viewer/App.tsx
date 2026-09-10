@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Feed } from './components/Feed';
+import { UsagePanel } from './components/UsagePanel';
 import { ContextSettingsModal } from './components/ContextSettingsModal';
 import { LogsDrawer } from './components/LogsModal';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
@@ -8,7 +9,7 @@ import { useSSE } from './hooks/useSSE';
 import { useSettings } from './hooks/useSettings';
 import { usePagination } from './hooks/usePagination';
 import { useTheme } from './hooks/useTheme';
-import { Observation, Summary, UserPrompt } from './types';
+import { Observation, Summary, UserPrompt, AssistantMessage } from './types';
 import { mergeAndDeduplicateByProject } from './utils/data';
 
 export function App() {
@@ -19,8 +20,9 @@ export function App() {
   const [paginatedObservations, setPaginatedObservations] = useState<Observation[]>([]);
   const [paginatedSummaries, setPaginatedSummaries] = useState<Summary[]>([]);
   const [paginatedPrompts, setPaginatedPrompts] = useState<UserPrompt[]>([]);
+  const [paginatedMessages, setPaginatedMessages] = useState<AssistantMessage[]>([]);
 
-  const { observations, summaries, prompts, projects, isProcessing, queueDepth } = useSSE();
+  const { observations, summaries, prompts, messages, projects, isProcessing, queueDepth } = useSSE();
   const { settings, saveSettings, isSaving, saveStatus } = useSettings();
   const { preference, setThemePreference } = useTheme();
   const pagination = usePagination(currentFilter);
@@ -53,6 +55,12 @@ export function App() {
     return mergeAndDeduplicateByProject(live, paginated);
   }, [prompts, paginatedPrompts, matchesSelection]);
 
+  const allMessages = useMemo(() => {
+    const live = messages.filter(matchesSelection);
+    const paginated = paginatedMessages.filter(matchesSelection);
+    return mergeAndDeduplicateByProject(live, paginated);
+  }, [messages, paginatedMessages, matchesSelection]);
+
   const toggleContextPreview = useCallback(() => {
     setContextPreviewOpen(prev => !prev);
   }, []);
@@ -63,10 +71,11 @@ export function App() {
 
   const handleLoadMore = useCallback(async () => {
     try {
-      const [newObservations, newSummaries, newPrompts] = await Promise.all([
+      const [newObservations, newSummaries, newPrompts, newMessages] = await Promise.all([
         pagination.observations.loadMore(),
         pagination.summaries.loadMore(),
-        pagination.prompts.loadMore()
+        pagination.prompts.loadMore(),
+        pagination.messages.loadMore()
       ]);
 
       if (newObservations.length > 0) {
@@ -78,15 +87,19 @@ export function App() {
       if (newPrompts.length > 0) {
         setPaginatedPrompts(prev => [...prev, ...newPrompts]);
       }
+      if (newMessages.length > 0) {
+        setPaginatedMessages(prev => [...prev, ...newMessages]);
+      }
     } catch (error) {
       console.error('Failed to load more data:', error);
     }
-  }, [pagination.observations, pagination.summaries, pagination.prompts]);
+  }, [pagination.observations, pagination.summaries, pagination.prompts, pagination.messages]);
 
   useEffect(() => {
     setPaginatedObservations([]);
     setPaginatedSummaries([]);
     setPaginatedPrompts([]);
+    setPaginatedMessages([]);
     handleLoadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFilter]);
@@ -108,13 +121,16 @@ export function App() {
         }}
       />
 
+      <UsagePanel />
+
       <Feed
         observations={allObservations}
         summaries={allSummaries}
         prompts={allPrompts}
+        messages={allMessages}
         onLoadMore={handleLoadMore}
-        isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
-        hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
+        isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading || pagination.messages.isLoading}
+        hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore || pagination.messages.hasMore}
       />
 
       {!welcomeDismissed && (
