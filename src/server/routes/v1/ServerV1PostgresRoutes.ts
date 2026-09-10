@@ -31,7 +31,7 @@ import { meterRequests } from '../../middleware/usage-metering.js';
 import { PostgresUsageRepository } from '../../../storage/postgres/usage.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { PostgresServerSessionsRepository } from '../../../storage/postgres/server-sessions.js';
-import { IngestEventsService, type EnqueueOutcome } from '../../services/IngestEventsService.js';
+import { IngestEventsService, perEventGenerationEnabled, type EnqueueOutcome } from '../../services/IngestEventsService.js';
 import { EndSessionService } from '../../services/EndSessionService.js';
 import { normalizePlatformSource, normalizePlatformSourceOrNull } from '../../../shared/platform-source.js';
 
@@ -256,7 +256,11 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         res.status(400).json({ error: 'ValidationError', issues: parsedQuery.error.issues });
         return;
       }
-      const generate = parsedQuery.data.generate !== 'false';
+      // An explicit ?generate= wins; otherwise fall back to the deployment
+      // default so CLAUDE_MEM_GENERATE_PER_EVENT=false actually batches.
+      const generate = parsedQuery.data.generate !== undefined
+        ? parsedQuery.data.generate !== 'false'
+        : perEventGenerationEnabled();
       const wait = parsedQuery.data.wait === 'true';
 
       const result = CreateAgentEventSchema.safeParse(req.body);
@@ -334,7 +338,11 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         res.status(400).json({ error: 'ValidationError', issues: parsedQuery.error.issues });
         return;
       }
-      const generate = parsedQuery.data.generate !== 'false';
+      // An explicit ?generate= wins; otherwise fall back to the deployment
+      // default so CLAUDE_MEM_GENERATE_PER_EVENT=false actually batches.
+      const generate = parsedQuery.data.generate !== undefined
+        ? parsedQuery.data.generate !== 'false'
+        : perEventGenerationEnabled();
       const wait = parsedQuery.data.wait === 'true';
 
       const batchSchema = z.array(CreateAgentEventSchema).min(1).max(500);

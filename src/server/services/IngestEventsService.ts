@@ -59,7 +59,7 @@ const EVENT_JOB_TYPE = 'observation_generate_for_event';
  * into a single call. Defaults to on so existing deployments keep their
  * behaviour; set CLAUDE_MEM_GENERATE_PER_EVENT=false to batch instead.
  */
-function perEventGenerationEnabled(): boolean {
+export function perEventGenerationEnabled(): boolean {
   const raw = (process.env.CLAUDE_MEM_GENERATE_PER_EVENT ?? '').trim().toLowerCase();
   if (raw === '') return true;
   return !(raw === 'false' || raw === '0' || raw === 'no' || raw === 'off');
