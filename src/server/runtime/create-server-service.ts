@@ -11,6 +11,7 @@ import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ActiveServerGenerationWorkerManager } from './ActiveServerGenerationWorkerManager.js';
 import { ClaudeObservationProvider } from '../generation/providers/ClaudeObservationProvider.js';
 import { GeminiObservationProvider } from '../generation/providers/GeminiObservationProvider.js';
+import { FailoverObservationProvider } from '../generation/providers/FailoverObservationProvider.js';
 import { OpenRouterObservationProvider } from '../generation/providers/OpenRouterObservationProvider.js';
 import type { ServerGenerationProvider } from '../generation/providers/shared/types.js';
 import { ServerService } from './ServerService.js';
@@ -253,6 +254,17 @@ function buildServerGenerationProviderFromEnv(): ServerGenerationProvider | null
   }
 }
 
+/**
+ * Model candidates in preference order. Blank entries are dropped so a
+ * trailing comma or an unset override cannot yield an empty model id.
+ */
+function parseModelList(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(entry => entry.length > 0);
+}
+
 function instantiateServerGenerationProvider(provider: string): ServerGenerationProvider | null {
   if (provider === 'claude' || provider === 'anthropic') {
     const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.CLAUDE_MEM_ANTHROPIC_API_KEY ?? '';
@@ -264,8 +276,18 @@ function instantiateServerGenerationProvider(provider: string): ServerGeneration
   if (provider === 'gemini') {
     const apiKey = process.env.GEMINI_API_KEY ?? process.env.CLAUDE_MEM_GEMINI_API_KEY ?? '';
     if (!apiKey) return null;
+    // CLAUDE_MEM_SERVER_MODEL accepts a comma-separated list. Gemini's free
+    // tier meters per project AND per model, so a spent model leaves the rest
+    // usable; the failover wrapper walks the list on quota errors.
+    const models = parseModelList(process.env.CLAUDE_MEM_SERVER_MODEL);
+    if (models.length > 1) {
+      return new FailoverObservationProvider(models.map(model => ({
+        modelId: model,
+        provider: new GeminiObservationProvider({ apiKey, model }),
+      })));
+    }
     const opts: { apiKey: string; model?: string } = { apiKey };
-    if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
+    if (models[0]) opts.model = models[0];
     return new GeminiObservationProvider(opts);
   }
   if (provider === 'openrouter') {

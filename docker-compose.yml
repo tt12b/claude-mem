@@ -188,10 +188,10 @@ services:
       CLAUDE_MEM_USAGE_METERING: ${CLAUDE_MEM_USAGE_METERING:-1}
       # 관측치의 사람이 읽는 필드를 이 언어로 생성한다. 비우면 모델 기본값(영어).
       CLAUDE_MEM_OBSERVATION_LANGUAGE: ${CLAUDE_MEM_OBSERVATION_LANGUAGE:-Korean}
-      # 모델을 명시한다. 무료 티어 쿼터는 PerProjectPerModel 이라 모델마다 따로
-      # 잡히는데, `gemini-flash-latest` 는 최신 모델로 해석되어 한도가 가장 짜다
-      # (측정값: 일 20건). lite 계열이 요약에는 충분하면서 한도가 넉넉하다.
-      CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-gemini-3.5-flash-lite}
+      # 콤마 구분 목록. 무료 쿼터가 PerProjectPerModel 이라 한 모델이 소진돼도
+      # 나머지는 살아있으므로, 429 가 나면 다음 모델로 넘어간다.
+      # 앞쪽일수록 우선. lite 계열이 요약에는 충분하면서 한도가 넉넉하다.
+      CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-flash-latest}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MEM_ANTHROPIC_API_KEY: ${CLAUDE_MEM_ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

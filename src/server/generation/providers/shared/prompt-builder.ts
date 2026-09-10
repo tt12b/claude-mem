@@ -126,6 +126,8 @@ export function buildServerGenerationPrompt(
 
   const observationOutputSchema = buildObservationOutputSchema(mode);
 
+  const isSummaryJob = context.job.sourceType === 'session_summary';
+
   const prompt = [
     '<server_beta_observation_request>',
     `  <project_id>${escapeXml(context.project.projectId)}</project_id>`,
@@ -136,6 +138,18 @@ export function buildServerGenerationPrompt(
     '  </agent_events>',
     '</server_beta_observation_request>',
     '',
+    ...(isSummaryJob ? summaryInstructions() : observationInstructions(observationOutputSchema)),
+    ...languageDirective(),
+  ].join('\n');
+
+  return { prompt, hadPrivateContent, skippedAll, includedEvents };
+}
+
+/**
+ * Per-event jobs want discrete observations.
+ */
+function observationInstructions(observationOutputSchema: string): string[] {
+  return [
     'You are observing an agent at work. Return one or more',
     '<observation>...</observation> XML blocks summarizing durable, useful',
     'discoveries from the events above. If the events contain nothing worth',
@@ -145,10 +159,36 @@ export function buildServerGenerationPrompt(
     '',
     'Schema for each <observation> block:',
     observationOutputSchema,
-    ...languageDirective(),
-  ].join('\n');
+  ];
+}
 
-  return { prompt, hadPrivateContent, skippedAll, includedEvents };
+/**
+ * Session-summary jobs are parsed by processSessionSummaryResponse, which
+ * reads a `<summary>` block (src/sdk/parser.ts ParsedSummary) — not
+ * `<observation>` blocks. Asking for the wrong shape here makes every summary
+ * job land as "nothing to record": the parser finds no summary, the content
+ * is empty, and the job completes having persisted zero rows. That went
+ * unnoticed while per-event jobs carried the load; once generation moved to
+ * periodic batching it silenced observations entirely.
+ */
+function summaryInstructions(): string[] {
+  return [
+    'You are summarizing a stretch of an agent session. Return exactly one',
+    '<summary>...</summary> XML block covering the events above. If there is',
+    'nothing worth recording (everything was scrubbed, or the activity was',
+    'trivial), return a single self-closing <skip_summary /> tag and nothing',
+    'else. Do not include any prose outside the XML.',
+    '',
+    'Schema for the <summary> block:',
+    '<summary>',
+    '  <request>what the user asked for</request>',
+    '  <investigated>what was examined and how</investigated>',
+    '  <learned>findings that stay true beyond this session</learned>',
+    '  <completed>what actually changed</completed>',
+    '  <next_steps>what remains open</next_steps>',
+    '  <notes>anything else worth keeping</notes>',
+    '</summary>',
+  ];
 }
 
 interface EventBlockResult {
