@@ -84,8 +84,10 @@ export interface ModelReport {
     priority: number;
     calls: { total: number; succeeded: number; failed: number };
     tokens: number;
-    /** Ceiling Google reported when refusing; null until it has refused once. */
+    /** Ceiling in force: measured from a 429 if seen, else the configured figure. */
     limit: number | null;
+    /** Where `limit` came from — a measured value supersedes a configured one. */
+    limitSource: 'measured' | 'configured' | null;
     remaining: number | null;
   }>;
 }

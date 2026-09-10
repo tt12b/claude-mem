@@ -95,7 +95,11 @@ export function ModelPanel() {
               <Metric
                 label="남음"
                 value={model.remaining}
-                suffix={model.limit !== null ? ` / ${model.limit}` : ''}
+                suffix={
+                  model.limit !== null
+                    ? ` / ${model.limit}${model.limitSource === 'configured' ? ' (추정)' : ''}`
+                    : ''
+                }
                 unknownHint="한도 미확인"
               />
             </span>
@@ -105,8 +109,8 @@ export function ModelPanel() {
 
       <p className="model-note">
         모델을 누르면 그 모델을 먼저 시도합니다. 한도에 걸리면 나머지 모델로 자동
-        전환되므로 선택해도 생성이 멈추지 않습니다. 한도는 Google 이 요청을 거절할
-        때만 알려주므로, 아직 거절당한 적 없는 모델은 남은 양을 알 수 없습니다.
+        전환되므로 선택해도 생성이 멈추지 않습니다. “추정”은 공개 문서 기준값이고,
+        Google 이 실제로 요청을 거절하면 그때 알려준 값으로 교정됩니다.
       </p>
     </div>
   );

@@ -61,6 +61,22 @@ function parsePageQuery(req: Request): PageQuery {
  */
 const PROJECT_LABEL_SQL = `COALESCE(s.metadata->>'project', p.name, 'unknown')`;
 
+/**
+ * `CLAUDE_MEM_MODEL_LIMITS` as `model=limit` pairs, e.g.
+ * `gemini-3.5-flash-lite=1000,gemini-flash-latest=20`. Published free-tier
+ * figures go here so the dashboard shows headroom before a model has ever
+ * been refused; a measured limit from a 429 supersedes it.
+ */
+function parseModelLimits(raw: string | undefined): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const pair of (raw ?? '').split(',')) {
+    const [name, value] = pair.split('=').map(part => part.trim());
+    const limit = Number.parseInt(value ?? '', 10);
+    if (name && Number.isFinite(limit) && limit > 0) out.set(name, limit);
+  }
+  return out;
+}
+
 function toEpoch(value: Date | string | null): number {
   if (!value) return 0;
   return value instanceof Date ? value.getTime() : new Date(value).getTime();
@@ -375,12 +391,18 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       tokens.rows.map(row => [row.model ?? 'unknown', Number(row.total)]),
     );
 
-    const limitByModel = new Map<string, number>();
+    // Two sources, measured wins. A published figure is a starting point so
+    // the gauge is not blank on day one, but the only number that is true for
+    // THIS key is the one Google quoted while refusing it — today
+    // `gemini-flash-latest` came back with limit 20 against a documented
+    // figure orders of magnitude higher.
+    const configuredLimits = parseModelLimits(process.env.CLAUDE_MEM_MODEL_LIMITS);
+    const measuredLimits = new Map<string, number>();
     for (const row of limits.rows) {
       const text = row.reason ?? '';
       const limit = /limit=([0-9]+)/.exec(text)?.[1];
       const model = /model=([A-Za-z0-9._-]+)/.exec(text)?.[1];
-      if (limit && model && !limitByModel.has(model)) limitByModel.set(model, Number(limit));
+      if (limit && model && !measuredLimits.has(model)) measuredLimits.set(model, Number(limit));
     }
 
     const preferred = await new PostgresServerSettingsRepository(this.options.pool)
@@ -405,7 +427,8 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       models: names.map(name => {
         const c = callsByModel.get(name) ?? { succeeded: 0, failed: 0 };
         const used = c.succeeded + c.failed;
-        const limit = limitByModel.get(name) ?? null;
+        const measured = measuredLimits.get(name) ?? null;
+        const limit = measured ?? configuredLimits.get(name) ?? null;
         return {
           name,
           configured: configured.includes(name),
@@ -415,6 +438,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
           calls: { total: used, succeeded: c.succeeded, failed: c.failed },
           tokens: tokensByModel.get(name) ?? 0,
           limit,
+          limitSource: measured !== null ? 'measured' : (limit !== null ? 'configured' : null),
           remaining: limit !== null ? Math.max(0, limit - used) : null,
         };
       }).sort((a, b) => {

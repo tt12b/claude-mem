@@ -128,6 +128,10 @@ services:
       # 목록으로 그대로 보여주므로, 어긋나면 대시보드가 실제와 다른 걸 말한다.
       CLAUDE_MEM_SERVER_PROVIDER: ${CLAUDE_MEM_SERVER_PROVIDER:-claude}
       CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-flash-latest}
+      # 모델별 일일 요청 한도 추정치(model=limit). 대시보드가 남은 양을 보여주기
+      # 위한 출발점일 뿐이고, 실제로 429 를 받으면 그때 Google 이 알려준 값으로
+      # 교정된다. gemini-flash-latest 의 20 은 이 키로 실측한 값이다.
+      CLAUDE_MEM_MODEL_LIMITS: ${CLAUDE_MEM_MODEL_LIMITS:-gemini-3.5-flash-lite=1000,gemini-3.1-flash-lite=1000,gemini-3.6-flash=250,gemini-flash-latest=20}
       # #2558 — REDIS_URL fallback: default to the in-stack valkey service so the
       # var is not a brittle hard requirement; override CLAUDE_MEM_REDIS_URL to
       # point at an external Redis.
