@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ModelReport } from '../types';
 import { API_ENDPOINTS } from '../constants/api';
+import { CollapsiblePanel } from './CollapsiblePanel';
 
 const REFRESH_MS = 30_000;
 
@@ -64,10 +65,16 @@ export function ModelPanel() {
     return null;
   }
 
+  const activeRow = report.models.find(m => m.active) ?? null;
+  const summary = activeRow
+    ? `${activeRow.name}${activeRow.remaining !== null ? ` · 남은 요청 ${activeRow.remaining.toLocaleString()}` : ''}`
+    : (report.provider ?? '미설정');
+
   return (
+    <CollapsiblePanel storageKey="cm.panel.models" title="요약 모델" summary={summary}>
     <div className="model-panel">
       <div className="model-header">
-        <span className="model-title">요약 모델 · 최근 {report.windowDays}일</span>
+        <span className="model-title">최근 {report.windowDays}일</span>
         <span className="model-provider">{report.provider ?? '미설정'}</span>
       </div>
 
@@ -116,6 +123,7 @@ export function ModelPanel() {
         Google 이 실제로 요청을 거절하면 그때 알려준 값으로 교정됩니다.
       </p>
     </div>
+    </CollapsiblePanel>
   );
 }
 

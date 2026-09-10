@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { UsageReport } from '../types';
 import { API_ENDPOINTS } from '../constants/api';
+import { CollapsiblePanel } from './CollapsiblePanel';
 
 const REFRESH_MS = 30_000;
 
@@ -61,9 +62,14 @@ export function UsagePanel() {
   const model = usage.tokens.find(row => row.model)?.model ?? null;
 
   return (
+    <CollapsiblePanel
+      storageKey="cm.panel.usage"
+      title="요약 생성 사용량"
+      summary={`시도 ${usage.calls.total.toLocaleString()} · 실패 ${usage.calls.failed.toLocaleString()}`}
+    >
     <div className="usage-panel">
       <div className="usage-header">
-        <span className="usage-title">요약 생성 사용량 · 최근 {usage.windowDays}일</span>
+        <span className="usage-title">최근 {usage.windowDays}일</span>
         <span className="usage-provider">
           {usage.provider ?? '미설정'}{model ? ` · ${model}` : ''}
         </span>
@@ -100,6 +106,7 @@ export function UsagePanel() {
         </div>
       )}
     </div>
+    </CollapsiblePanel>
   );
 }
 

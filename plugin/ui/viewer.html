@@ -1146,6 +1146,59 @@
       white-space: pre-wrap;
     }
 
+    /* Collapsible reference panels. Folded they cost one line; the summary
+       keeps them useful without expanding. */
+    .panel-shell {
+      margin: 12px auto 0;
+      max-width: var(--feed-max-width, 900px);
+    }
+
+    .panel-toggle {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      width: 100%;
+      padding: 6px 8px;
+      background: none;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      color: var(--color-text-muted);
+      font-size: 12px;
+      text-align: left;
+    }
+
+    .panel-toggle:hover {
+      background: var(--color-bg-card);
+    }
+
+    .panel-caret {
+      font-size: 10px;
+      width: 10px;
+    }
+
+    .panel-toggle-title {
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .panel-toggle-summary {
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      color: var(--color-text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* The panels bring their own frame and top margin; inside the shell the
+       margin would double up. */
+    .panel-body > .model-panel,
+    .panel-body > .usage-panel {
+      margin-top: 4px;
+      margin-bottom: 0;
+    }
+
     /* Model candidate list. The active row is the one that last produced a
        completed job — with failover that is not necessarily the first. */
     .model-panel {

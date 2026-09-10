@@ -50,7 +50,14 @@ export function createCorsMiddleware(): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
     const origin = req.headers.origin;
     if (origin) {
-      if (!origin.startsWith('http://localhost:') && !origin.startsWith('http://127.0.0.1:')) {
+      // A browser attaches Origin to every non-GET request, including ones
+      // the page makes back to the host that served it. A self-hosted
+      // deployment is reached by its own address, not localhost, so without
+      // the same-origin case the dashboard cannot POST to its own API.
+      const host = req.get('host');
+      const selfOrigin = host ? `${req.protocol}://${host}` : null;
+      const isSelf = selfOrigin !== null && origin === selfOrigin;
+      if (!isSelf && !origin.startsWith('http://localhost:') && !origin.startsWith('http://127.0.0.1:')) {
         // Write the response here rather than forwarding an error. The worker never
         // calls finalizeRoutes(), so it has no terminal error handler: a
         // forwarded error lands in Express's default handler, which returns a
