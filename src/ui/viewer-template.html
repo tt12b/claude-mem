@@ -1110,6 +1110,26 @@
       color: var(--color-prompt-badge-text);
     }
 
+    /* A conversation turn: the question, then everything it produced. The
+       left rule and indent make the ownership visible without nesting cards. */
+    .turn {
+      margin-bottom: 28px;
+    }
+
+    .turn-replies {
+      margin-top: 8px;
+      margin-left: 14px;
+      padding-left: 14px;
+      border-left: 2px solid var(--color-border);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .turn-replies:empty {
+      display: none;
+    }
+
     /* Assistant turns. Mirrors .prompt-card so a question and its answer read
        as a pair, distinguished by the accent rather than by layout. */
     .message-card {

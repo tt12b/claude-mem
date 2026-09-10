@@ -17,6 +17,46 @@ interface FeedProps {
   hasMore: boolean;
 }
 
+/**
+ * One conversation turn: the question, then everything that followed it until
+ * the next question — answers first, plus whatever observations and summaries
+ * were generated from that stretch of work.
+ *
+ * `prompt` is null for the leading group, which holds items that arrived
+ * before any captured question (older sessions, or work that started before
+ * prompt capture was added).
+ */
+interface Turn {
+  key: string;
+  prompt: UserPrompt | null;
+  items: FeedItem[];
+}
+
+function groupIntoTurns(items: FeedItem[]): Turn[] {
+  // Ascending, so a prompt is seen before the replies that belong to it.
+  const ascending = [...items].sort((a, b) => a.created_at_epoch - b.created_at_epoch);
+
+  const turns: Turn[] = [];
+  let current: Turn | null = null;
+
+  for (const item of ascending) {
+    if (item.itemType === 'prompt') {
+      current = { key: `turn-${item.id}`, prompt: item, items: [] };
+      turns.push(current);
+      continue;
+    }
+    if (!current) {
+      current = { key: 'turn-leading', prompt: null, items: [] };
+      turns.push(current);
+    }
+    current.items.push(item);
+  }
+
+  // Newest conversation on top, but each turn reads top-down: question first,
+  // then the replies in the order they happened.
+  return turns.reverse();
+}
+
 export function Feed({ observations, summaries, prompts, messages, onLoadMore, isLoading, hasMore }: FeedProps) {
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -50,34 +90,49 @@ export function Feed({ observations, summaries, prompts, messages, onLoadMore, i
     };
   }, [hasMore, isLoading]);
 
-  const items = useMemo<FeedItem[]>(() => {
-    const combined = [
+  const turns = useMemo<Turn[]>(() => {
+    const combined: FeedItem[] = [
       ...observations.map(o => ({ ...o, itemType: 'observation' as const })),
       ...summaries.map(s => ({ ...s, itemType: 'summary' as const })),
       ...prompts.map(p => ({ ...p, itemType: 'prompt' as const })),
       ...messages.map(m => ({ ...m, itemType: 'message' as const }))
     ];
 
-    return combined.sort((a, b) => b.created_at_epoch - a.created_at_epoch);
+    return groupIntoTurns(combined);
   }, [observations, summaries, prompts, messages]);
+
+  const itemCount = useMemo(
+    () => turns.reduce((sum, turn) => sum + turn.items.length + (turn.prompt ? 1 : 0), 0),
+    [turns]
+  );
 
   return (
     <div className="feed" ref={feedRef}>
       <ScrollToTop targetRef={feedRef} />
       <div className="feed-content">
-        {items.map(item => {
-          const key = `${item.itemType}-${item.id}`;
-          if (item.itemType === 'observation') {
-            return <ObservationCard key={key} observation={item} />;
-          } else if (item.itemType === 'summary') {
-            return <SummaryCard key={key} summary={item} />;
-          } else if (item.itemType === 'message') {
-            return <MessageCard key={key} message={item} />;
-          } else {
-            return <PromptCard key={key} prompt={item} />;
-          }
-        })}
-        {items.length === 0 && !isLoading && (
+        {turns.map(turn => (
+          <div className="turn" key={turn.key}>
+            {turn.prompt && <PromptCard prompt={turn.prompt} />}
+            {turn.items.length > 0 && (
+              <div className="turn-replies">
+                {turn.items.map(item => {
+                  const key = `${item.itemType}-${item.id}`;
+                  if (item.itemType === 'observation') {
+                    return <ObservationCard key={key} observation={item} />;
+                  }
+                  if (item.itemType === 'summary') {
+                    return <SummaryCard key={key} summary={item} />;
+                  }
+                  if (item.itemType === 'message') {
+                    return <MessageCard key={key} message={item} />;
+                  }
+                  return null;
+                })}
+              </div>
+            )}
+          </div>
+        ))}
+        {itemCount === 0 && !isLoading && (
           <div style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
             No items to display
           </div>
@@ -88,10 +143,10 @@ export function Feed({ observations, summaries, prompts, messages, onLoadMore, i
             Loading more...
           </div>
         )}
-        {hasMore && !isLoading && items.length > 0 && (
+        {hasMore && !isLoading && itemCount > 0 && (
           <div ref={loadMoreRef} style={{ height: '20px', margin: '10px 0' }} />
         )}
-        {!hasMore && items.length > 0 && (
+        {!hasMore && itemCount > 0 && (
           <div style={{ textAlign: 'center', padding: '20px', color: '#8b949e', fontSize: '14px' }}>
             No more items to load
           </div>
