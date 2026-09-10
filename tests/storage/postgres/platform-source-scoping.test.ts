@@ -213,12 +213,18 @@ describe('server-beta Postgres platform source scoping', () => {
     expect(client.calls[0].text).toContain('observations.server_session_id IS NULL');
     expect(client.calls[0].text).toContain('INNER JOIN agent_events');
     expect(client.calls[0].text).toContain('agent_events.platform_source = $5');
+    // Search also substring-matches the query terms, because the full-text
+    // configuration is English-only and leaves Korean particles attached.
+    // The platform scoping above must keep applying on top of that wider
+    // match, which is what the $5 assertions verify.
+    expect(client.calls[0].text).toContain("unnest($6::text[])");
     expect(client.calls[0].values).toEqual([
       'project-1',
       'team-1',
       'auth bug',
       7,
       'cursor',
+      ['auth', 'bug'],
     ]);
   });
 });

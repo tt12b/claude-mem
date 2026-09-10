@@ -12,6 +12,7 @@ import {
   toJsonObject
 } from './utils.js';
 import { normalizePlatformSourceOrNull } from '../../shared/platform-source.js';
+import { buildSearchTerms } from './search-terms.js';
 
 export type ObservationSourceType = 'agent_event' | 'session_summary' | 'observation_reindex' | 'manual';
 
@@ -168,7 +169,17 @@ export class PostgresObservationRepository {
           AND server_sessions.team_id = observations.team_id
         WHERE observations.project_id = $1
           AND observations.team_id = $2
-          AND observations.content_search @@ websearch_to_tsquery('english', $3)
+          AND (
+            observations.content_search @@ websearch_to_tsquery('english', $3)
+            -- Full-text runs an English configuration, which leaves Korean
+            -- particles attached and so never matches a differently-inflected
+            -- stored form. Substring matching on the extracted terms covers
+            -- that; it widens the result set and never narrows it.
+            OR EXISTS (
+              SELECT 1 FROM unnest($6::text[]) AS term
+              WHERE observations.content ILIKE '%' || term || '%'
+            )
+          )
           AND (
             $5::text IS NULL
             OR server_sessions.platform_source = $5
@@ -187,10 +198,28 @@ export class PostgresObservationRepository {
               )
             )
           )
-        ORDER BY ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC, observations.updated_at DESC
+        ORDER BY
+          -- Rank on both signals: the full-text score, plus the share of
+          -- query terms that appear literally. Neither alone orders a mixed
+          -- Korean/English corpus sensibly.
+          ts_rank(observations.content_search, websearch_to_tsquery('english', $3))
+            + COALESCE((
+                SELECT count(*)::float
+                FROM unnest($6::text[]) AS term
+                WHERE observations.content ILIKE '%' || term || '%'
+              ) / NULLIF(array_length($6::text[], 1), 0), 0)
+            DESC,
+          observations.updated_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource]
+      [
+        input.projectId,
+        input.teamId,
+        input.query,
+        input.limit ?? 20,
+        platformSource,
+        buildSearchTerms(input.query),
+      ]
     );
     return result.rows.map(mapObservationRow);
   }

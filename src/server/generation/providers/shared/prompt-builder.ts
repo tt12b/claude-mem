@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ModeManager } from '../../../../services/domain/ModeManager.js';
-import type { ModeConfig, ObservationType } from '../../../../services/domain/types.js';
+import type { ModeConfig, ModePrompts, ObservationType } from '../../../../services/domain/types.js';
 import { stripTags } from '../../../../utils/tag-stripping.js';
 import { logger } from '../../../../utils/logger.js';
 import type { PostgresAgentEvent } from '../../../../storage/postgres/agent-events.js';
@@ -124,7 +124,13 @@ export function buildServerGenerationPrompt(
     ? `\n  <project_name>${escapeXml(context.project.projectName)}</project_name>`
     : '';
 
-  const observationOutputSchema = buildObservationOutputSchema(mode);
+  // Modes carry their own instruction text (`prompts`) alongside the type
+  // taxonomy — that is where the shipped translations live, e.g. code--ko
+  // localises every placeholder and states the output language. The server
+  // path only ever read `observation_types`, so a language mode selected by
+  // the operator had no effect here at all.
+  const prompts = ('prompts' in mode ? mode.prompts : undefined) as Partial<ModePrompts> | undefined;
+  const observationOutputSchema = buildObservationOutputSchema(mode, prompts);
 
   const isSummaryJob = context.job.sourceType === 'session_summary';
 
@@ -138,7 +144,11 @@ export function buildServerGenerationPrompt(
     '  </agent_events>',
     '</server_beta_observation_request>',
     '',
-    ...(isSummaryJob ? summaryInstructions() : observationInstructions(observationOutputSchema)),
+    ...(isSummaryJob
+      ? summaryInstructions(prompts)
+      : observationInstructions(observationOutputSchema, prompts)),
+    // The env directive stays as the fallback for deployments running the
+    // default mode; a mode that states its own language wins.
     ...languageDirective(),
   ].join('\n');
 
@@ -148,7 +158,10 @@ export function buildServerGenerationPrompt(
 /**
  * Per-event jobs want discrete observations.
  */
-function observationInstructions(observationOutputSchema: string): string[] {
+function observationInstructions(
+  observationOutputSchema: string,
+  prompts?: Partial<ModePrompts>,
+): string[] {
   return [
     'You are observing an agent at work. Return one or more',
     '<observation>...</observation> XML blocks summarizing durable, useful',
@@ -156,9 +169,11 @@ function observationInstructions(observationOutputSchema: string): string[] {
     'recording (e.g., everything was scrubbed by privacy filters or the',
     'activity was trivial), return a single self-closing <skip_summary />',
     'tag and nothing else. Do not include any prose outside the XML.',
+    ...(prompts?.type_guidance ? ['', prompts.type_guidance] : []),
     '',
     'Schema for each <observation> block:',
     observationOutputSchema,
+    ...(prompts?.footer ? ['', prompts.footer] : []),
   ];
 }
 
@@ -171,7 +186,8 @@ function observationInstructions(observationOutputSchema: string): string[] {
  * unnoticed while per-event jobs carried the load; once generation moved to
  * periodic batching it silenced observations entirely.
  */
-function summaryInstructions(): string[] {
+function summaryInstructions(prompts?: Partial<ModePrompts>): string[] {
+  const field = (value: string | undefined, fallback: string) => value ?? fallback;
   return [
     'You are summarizing a stretch of an agent session. Return exactly one',
     '<summary>...</summary> XML block covering the events above. If there is',
@@ -181,13 +197,14 @@ function summaryInstructions(): string[] {
     '',
     'Schema for the <summary> block:',
     '<summary>',
-    '  <request>what the user asked for</request>',
-    '  <investigated>what was examined and how</investigated>',
-    '  <learned>findings that stay true beyond this session</learned>',
-    '  <completed>what actually changed</completed>',
-    '  <next_steps>what remains open</next_steps>',
-    '  <notes>anything else worth keeping</notes>',
+    `  <request>${field(prompts?.xml_summary_request_placeholder, 'what the user asked for')}</request>`,
+    `  <investigated>${field(prompts?.xml_summary_investigated_placeholder, 'what was examined and how')}</investigated>`,
+    `  <learned>${field(prompts?.xml_summary_learned_placeholder, 'findings that stay true beyond this session')}</learned>`,
+    `  <completed>${field(prompts?.xml_summary_completed_placeholder, 'what actually changed')}</completed>`,
+    `  <next_steps>${field(prompts?.xml_summary_next_steps_placeholder, 'what remains open')}</next_steps>`,
+    `  <notes>${field(prompts?.xml_summary_notes_placeholder, 'anything else worth keeping')}</notes>`,
     '</summary>',
+    ...(prompts?.summary_footer ? ['', prompts.summary_footer] : []),
   ];
 }
 
@@ -238,18 +255,31 @@ function loadActiveModeOrFallback(): ModeConfig | { observation_types: ReadonlyA
   }
 }
 
-function buildObservationOutputSchema(mode: ModeConfig | { observation_types: ReadonlyArray<Pick<ObservationType, 'id'>> }): string {
+function buildObservationOutputSchema(
+  mode: ModeConfig | { observation_types: ReadonlyArray<Pick<ObservationType, 'id'>> },
+  prompts?: Partial<ModePrompts>,
+): string {
   const types = mode.observation_types.map(t => t.id).join(' | ');
+  // Listing bare ids left the model guessing what each one meant, so it kept
+  // reaching for the two that read as generic (`discovery`, `change`) and the
+  // rest of the taxonomy went unused. The mode already carries a label and a
+  // description per type; spelling them out is what makes the distinctions
+  // available to the model at all.
+  const described = (mode.observation_types as ReadonlyArray<Partial<ObservationType> & { id: string }>)
+    .filter(type => Boolean(type.description))
+    .map(type => `    ${type.id} — ${type.label ?? type.id}: ${type.description}`);
+
   return [
     '<observation>',
     `  <type>[ ${types} ]</type>`,
-    '  <title>...</title>',
-    '  <subtitle>...</subtitle>',
-    '  <facts><fact>...</fact></facts>',
-    '  <narrative>...</narrative>',
-    '  <concepts><concept>...</concept></concepts>',
-    '  <files_read><file>...</file></files_read>',
-    '  <files_modified><file>...</file></files_modified>',
+    ...(described.length > 0 ? ['  <!-- choose the type that fits best:', ...described, '  -->'] : []),
+    `  <title>${prompts?.xml_title_placeholder ?? '...'}</title>`,
+    `  <subtitle>${prompts?.xml_subtitle_placeholder ?? '...'}</subtitle>`,
+    `  <facts><fact>${prompts?.xml_fact_placeholder ?? '...'}</fact></facts>`,
+    `  <narrative>${prompts?.xml_narrative_placeholder ?? '...'}</narrative>`,
+    `  <concepts><concept>${prompts?.xml_concept_placeholder ?? '...'}</concept></concepts>`,
+    `  <files_read><file>${prompts?.xml_file_placeholder ?? '...'}</file></files_read>`,
+    `  <files_modified><file>${prompts?.xml_file_placeholder ?? '...'}</file></files_modified>`,
     '</observation>',
   ].join('\n');
 }

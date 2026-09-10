@@ -22,6 +22,8 @@
 // front of the whole surface.
 
 import express from 'express';
+import { readdir, readFile } from 'fs/promises';
+import { join } from 'path';
 import type { Application, Request, Response } from 'express';
 import type { RouteHandler } from '../../services/server/Server.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
@@ -181,12 +183,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     // that leaves the deployment.
     app.post('/api/models/active', express.json(), this.wrap(this.handleSelectModel));
     app.get('/api/context/preview', this.wrap(this.handleContextPreview));
-    app.get('/api/logs', (_req: Request, res: Response) => {
-      // The worker streams its own log file here. The server runtime logs to
-      // the container's stdout/log file instead, so report empty rather than
-      // 404 — the viewer's log modal then renders as "nothing to show".
-      res.json({ logs: [] });
-    });
+    app.get('/api/logs', this.wrap(this.handleLogs));
     app.get('/stream', this.handleStream.bind(this));
   }
 
@@ -575,6 +572,37 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     await repo.set(PREFERRED_MODEL_KEY, model);
     logger.info('SYSTEM', 'preferred generation model changed', { model });
     res.json({ ok: true, model });
+  }
+
+  /**
+   * Recent server log lines.
+   *
+   * The viewer treats `logs` as one newline-joined string and splits it
+   * itself (LogsModal), so an array here crashes the drawer. Tail the same
+   * file the logger writes; when there is none, an empty string renders as
+   * "no logs" instead of an error.
+   */
+  private async handleLogs(req: Request, res: Response): Promise<void> {
+    const rawLines = Number.parseInt(String(req.query.lines ?? '500'), 10);
+    const lines = Number.isFinite(rawLines) && rawLines > 0 ? Math.min(rawLines, 5000) : 500;
+
+    const dir = join(process.env.CLAUDE_MEM_DATA_DIR ?? '/data/claude-mem', 'logs');
+    let text = '';
+    try {
+      const today = (await readdir(dir))
+        .filter(name => name.endsWith('.log'))
+        .sort();
+      const newest = today[today.length - 1];
+      if (newest) {
+        const content = await readFile(join(dir, newest), 'utf8');
+        text = content.split('\n').slice(-lines).join('\n');
+      }
+    } catch {
+      // No log directory yet, or it is not readable. An empty string is the
+      // honest answer and keeps the drawer usable.
+      text = '';
+    }
+    res.json({ logs: text });
   }
 
   private page<T>(rows: T[], limit: number): { items: T[]; hasMore: boolean } {
