@@ -32,11 +32,17 @@ const DEFAULT_LIMIT = 50;
 /**
  * How long a quota refusal keeps a model marked spent.
  *
- * Google does not say when a daily allowance resets, so this is a rolling
- * window rather than a clock alignment: 24h after the last refusal we stop
- * claiming the model is out and let the failover chain find out for itself.
+ * Google does not say when a daily allowance resets, so the mark is cleared
+ * optimistically rather than waiting out a full day: if the model is still
+ * spent the next attempt re-marks it within one cycle, and if it recovered
+ * early the panel says so instead of lying for hours. Being wrong in the
+ * optimistic direction costs one refused request, which draws down nothing.
  */
-const EXHAUSTION_TTL_MS = 24 * 60 * 60 * 1000;
+const EXHAUSTION_TTL_MS = (() => {
+  const raw = Number.parseFloat(process.env.CLAUDE_MEM_EXHAUSTION_TTL_HOURS ?? '');
+  const hours = Number.isFinite(raw) && raw > 0 ? raw : 3;
+  return hours * 60 * 60 * 1000;
+})();
 const MAX_LIMIT = 200;
 /** How often an open /stream connection looks for rows it has not sent yet. */
 const STREAM_POLL_MS = 3_000;
@@ -460,12 +466,10 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         const limit = measured ?? configuredLimits.get(name) ?? null;
         const refused = refusedAt.get(name) ?? null;
         const succeeded = succeededAt.get(name) ?? null;
-        // A refusal only counts until the allowance it hit has rolled over.
-        // Without this a model far down the candidate list stays grey for
-        // good: the chain stops at the first model that works, so a spent
-        // one at the back is never retried and never gets the success that
-        // would clear it. The free tier meters per day, so a refusal older
-        // than one window is no longer evidence of anything.
+        // A refusal goes stale on its own. Without this a model far down the
+        // candidate list stays grey for good: the chain stops at the first
+        // model that works, so a spent one at the back is never retried and
+        // never earns the success that would clear it.
         const stale = refused !== null && Date.now() - refused > EXHAUSTION_TTL_MS;
         const exhausted = refused !== null
           && !stale
