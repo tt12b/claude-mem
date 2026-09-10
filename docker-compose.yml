@@ -116,6 +116,12 @@ services:
       # 서비스에는 그 변수가 없어 두 컨테이너가 서로 다른 큐를 보게 된다. 양쪽에
       # 같은 값을 명시해 잡이 소비되지 않는 문제를 막는다.
       CLAUDE_MEM_QUEUE_REDIS_PREFIX: ${CLAUDE_MEM_QUEUE_REDIS_PREFIX:-claude_mem_37877}
+      # 이벤트 1건당 provider 1회 호출은 무료 티어 한도를 한 세션에서 소진시킨다.
+      # 끄면 이벤트는 그대로 저장되고, 아래 주기 요약이 쌓인 것을 한 번에 넘긴다.
+      CLAUDE_MEM_GENERATE_PER_EVENT: ${CLAUDE_MEM_GENERATE_PER_EVENT:-false}
+      # 주기 요약 간격(분). 새 이벤트가 없는 세션은 잡을 만들지 않으므로
+      # 유휴 상태에서는 provider 호출이 0이다. 0 이면 주기 요약 비활성.
+      CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES: ${CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES:-10}
       # #2558 — REDIS_URL fallback: default to the in-stack valkey service so the
       # var is not a brittle hard requirement; override CLAUDE_MEM_REDIS_URL to
       # point at an external Redis.
