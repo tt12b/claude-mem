@@ -111,7 +111,7 @@ afterAll(() => {
 });
 
 describe('sessionInitHandler server semantic injection', () => {
-  it('starts the server session and skips worker semantic injection in server mode', async () => {
+  it('starts the server session and injects context from the server, not the worker', async () => {
     const env = { ...process.env };
     delete env.CLAUDE_MEM_INTERNAL;
     const prompt = 'Please restore platform-aware context for this Cursor session.';
@@ -161,7 +161,18 @@ describe('sessionInitHandler server semantic injection', () => {
       if (start.projectId !== 'server-project-1' || start.externalSessionId !== 'session-server-context' || start.contentSessionId !== 'session-server-context' || start.platformSource !== 'cursor') {
         throw new Error('startSession body mismatch: ' + JSON.stringify(start));
       }
-      if (serverCalls.contextObservations.length !== 0) throw new Error('contextObservations should not be called');
+      // Server mode used to return here without asking for context, which
+      // left a self-hosted deployment storing memories it never fed back.
+      // It now uses the server's own /v1/context instead of the worker's
+      // semantic endpoint — the worker must still not be touched.
+      if (serverCalls.contextObservations.length !== 1) throw new Error('contextObservations count mismatch: ' + serverCalls.contextObservations.length);
+      const ctx = serverCalls.contextObservations[0];
+      if (ctx.projectId !== 'server-project-1' || ctx.limit !== 7 || ctx.platformSource !== 'cursor') {
+        throw new Error('contextObservations body mismatch: ' + JSON.stringify(ctx));
+      }
+      if (result.hookSpecificOutput?.additionalContext !== 'server semantic context') {
+        throw new Error('expected the server context to be injected: ' + JSON.stringify(result));
+      }
       if (!result.continue || !result.suppressOutput) throw new Error('unexpected result ' + JSON.stringify(result));
     `;
 
