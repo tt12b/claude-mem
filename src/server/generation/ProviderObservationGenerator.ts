@@ -513,12 +513,22 @@ export class ProviderObservationGenerator {
       // job. The session repo enforces tenant scope inside its WHERE clause.
       if (!job.serverSessionId) return [];
       const sessions = new PostgresServerSessionsRepository(this.options.pool);
-      const events = await sessions.listUnprocessedEvents({
+      // Periodic summarisation advances `server_sessions.last_generated_at`
+      // after each successful run, so a scheduled job must send only what
+      // arrived since that watermark. Falling back to the completed-job scan
+      // keeps behaviour intact when per-event generation is still enabled and
+      // the watermark has never been set.
+      const sinceWatermark = await sessions.listEventsSinceWatermark({
         serverSessionId: job.serverSessionId,
         projectId: job.projectId,
         teamId: job.teamId,
       });
-      return events;
+      if (sinceWatermark.length > 0) return sinceWatermark;
+      return await sessions.listUnprocessedEvents({
+        serverSessionId: job.serverSessionId,
+        projectId: job.projectId,
+        teamId: job.teamId,
+      });
     }
 
     if (job.sourceType !== 'agent_event') {

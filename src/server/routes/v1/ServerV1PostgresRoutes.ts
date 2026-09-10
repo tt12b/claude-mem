@@ -143,6 +143,15 @@ export class ServerV1PostgresRoutes implements RouteHandler {
     return this.endSession;
   }
 
+  /**
+   * Summary lane accessor for callers outside the route table — the periodic
+   * summariser needs the same lane resolution (and the same override hooks)
+   * that EndSessionService gets.
+   */
+  resolveSummaryQueueForScheduler(): ReturnType<ActiveServerQueueManager['getQueue']> | null {
+    return this.resolveQueue('summary');
+  }
+
   setupRoutes(app: Application): void {
     // Phase 12 — request_id middleware MUST run before auth so the audit log
     // can carry a stable correlation id across "rejected at auth" and
@@ -746,6 +755,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
               platformSource,
             });
             if (existing) {
+              await this.recordPromptFromSessionStart(existing, body.metadata, platformSource);
               res.status(200).json({ session: serializeSession(existing) });
               return;
             }
@@ -786,6 +796,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             }
             throw error;
           }
+          await this.recordPromptFromSessionStart(session, body.metadata, platformSource);
           await this.auditWrite(req, 'session.write', session.id, session.projectId);
           res.status(201).json({ session: serializeSession(session) });
         } catch (error) {
@@ -1152,6 +1163,64 @@ export class ServerV1PostgresRoutes implements RouteHandler {
     }
     return null;
   }
+
+  /**
+   * Persist the user's prompt as a `user_prompt` agent_event.
+   *
+   * The client calls /v1/sessions/start on every UserPromptSubmit and carries
+   * the prompt in `metadata.prompt` (src/cli/handlers/session-init.ts). The
+   * session row only ever holds the newest one — an existing session returns
+   * early above, and `repo.create` overwrites `metadata` — so without this the
+   * question side of every conversation is lost while the answers
+   * (`assistant_message`) and tool calls are kept.
+   *
+   * Best-effort: a failure here must not fail session start, since the client
+   * treats that as non-recoverable and falls back to local-only capture.
+   */
+  private async recordPromptFromSessionStart(
+    session: { id: string; projectId: string; teamId: string; contentSessionId: string | null },
+    metadata: Record<string, unknown> | undefined,
+    platformSource: string | null,
+  ): Promise<void> {
+    const prompt = typeof metadata?.prompt === 'string' ? metadata.prompt.trim() : '';
+    if (!prompt) return;
+
+    try {
+      await this.ingestEvents.ingestOne(
+        {
+          projectId: session.projectId,
+          teamId: session.teamId,
+          serverSessionId: session.id,
+          contentSessionId: session.contentSessionId,
+          sourceAdapter: 'hook',
+          // Deterministic so a retried session-start does not duplicate the
+          // row. The minute bucket keeps the same question asked twice in one
+          // session distinct while still collapsing an immediate retry.
+          sourceEventId: buildPromptSourceEventId({
+            serverSessionId: session.id,
+            prompt,
+            at: new Date(),
+          }),
+          eventType: 'user_prompt',
+          platformSource,
+          payload: { prompt },
+          occurredAt: new Date(),
+        },
+        {
+          // The prompt alone is thin material for its own observation; the
+          // periodic summariser folds it in with the surrounding turn.
+          generate: false,
+          source: 'session_start_prompt',
+        },
+      );
+    } catch (error) {
+      logger.warn('SYSTEM', 'failed to record user_prompt from session start', {
+        serverSessionId: session.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
 
   private toAgentEventInput(body: z.infer<typeof CreateAgentEventSchema>, teamId: string): CreatePostgresAgentEventInput {
     const sourceAdapter = body.sourceType ?? SOURCE_ADAPTER_DEFAULT;
@@ -2075,3 +2144,22 @@ function serializeGenerationJobStatus(
     updatedAtEpoch: job.updatedAtEpoch,
   };
 }
+
+/**
+ * Stable identity for a prompt event. Bucketed to the minute so a retried
+ * session-start collapses onto the same row, while the same question asked
+ * again later in the session still records separately.
+ */
+function buildPromptSourceEventId(input: {
+  serverSessionId: string;
+  prompt: string;
+  at: Date;
+}): string {
+  const minuteBucket = new Date(Math.floor(input.at.getTime() / 60_000) * 60_000).toISOString();
+  const digest = createHash('sha256')
+    .update(`${input.serverSessionId}\u0000${minuteBucket}\u0000${input.prompt}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `user_prompt:${digest}`;
+}
+

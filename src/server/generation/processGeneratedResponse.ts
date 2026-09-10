@@ -14,6 +14,7 @@ import {
   type PostgresObservationGenerationJob,
 } from '../../storage/postgres/generation-jobs.js';
 import { PostgresAuthRepository } from '../../storage/postgres/auth.js';
+import { PostgresServerSessionsRepository } from '../../storage/postgres/server-sessions.js';
 import { PostgresUsageRepository } from '../../storage/postgres/usage.js';
 import {
   withPostgresTransaction,
@@ -363,6 +364,19 @@ async function persistGeneratedObservations(
       teamId: fresh.teamId,
       status: 'completed',
     });
+
+    // Advance the session's generation watermark so the periodic summariser
+    // sends only events that arrive after this run. Inside the same
+    // transaction as the status transition: a rolled-back persist must not
+    // leave a watermark that would silently drop those events.
+    if (fresh.sourceType === 'session_summary' && fresh.serverSessionId) {
+      const sessionsRepo = new PostgresServerSessionsRepository(client);
+      await sessionsRepo.markGenerationCompleted({
+        id: fresh.serverSessionId,
+        projectId: fresh.projectId,
+        teamId: fresh.teamId,
+      });
+    }
     await eventsLogRepo.append({
       generationJobId: fresh.id,
       projectId: fresh.projectId,

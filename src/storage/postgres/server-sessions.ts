@@ -274,6 +274,76 @@ export class PostgresServerSessionsRepository {
   }
 
   /**
+   * Sessions that have at least one event newer than their generation
+   * watermark (`last_generated_at`, NULL means never generated). This is the
+   * periodic summariser's work list: it exists so a scheduled run can skip
+   * the provider entirely when nothing new has arrived.
+   */
+  async listSessionsWithNewEvents(input: {
+    limit?: number;
+  } = {}): Promise<Array<{ id: string; projectId: string; teamId: string; eventCount: number }>> {
+    const limit = input.limit ?? 200;
+    const result = await this.client.query<{
+      id: string;
+      project_id: string;
+      team_id: string;
+      event_count: string;
+    }>(
+      `
+        SELECT s.id, s.project_id, s.team_id, count(e.id) AS event_count
+        FROM server_sessions s
+        JOIN agent_events e
+          ON e.server_session_id = s.id
+         AND e.project_id = s.project_id
+         AND e.team_id = s.team_id
+         AND (s.last_generated_at IS NULL OR e.occurred_at > s.last_generated_at)
+        GROUP BY s.id, s.project_id, s.team_id
+        ORDER BY max(e.occurred_at) ASC
+        LIMIT $1
+      `,
+      [limit]
+    );
+    return result.rows.map(row => ({
+      id: row.id,
+      projectId: row.project_id,
+      teamId: row.team_id,
+      eventCount: Number(row.event_count),
+    }));
+  }
+
+  /**
+   * Events for this session newer than its generation watermark. Used by
+   * summary jobs so a periodic run sends only what has accumulated since the
+   * last successful generation instead of the whole session every time.
+   */
+  async listEventsSinceWatermark(input: {
+    serverSessionId: string;
+    projectId: string;
+    teamId: string;
+    limit?: number;
+  }): Promise<PostgresAgentEvent[]> {
+    const limit = input.limit ?? 500;
+    const result = await this.client.query<UnprocessedEventRow>(
+      `
+        SELECT e.*
+        FROM agent_events e
+        JOIN server_sessions s
+          ON s.id = e.server_session_id
+         AND s.project_id = e.project_id
+         AND s.team_id = e.team_id
+        WHERE e.server_session_id = $1
+          AND e.project_id = $2
+          AND e.team_id = $3
+          AND (s.last_generated_at IS NULL OR e.occurred_at > s.last_generated_at)
+        ORDER BY e.occurred_at ASC
+        LIMIT $4
+      `,
+      [input.serverSessionId, input.projectId, input.teamId, limit]
+    );
+    return result.rows.map(mapUnprocessedEventRow);
+  }
+
+  /**
    * List events tied to this server_session that do NOT yet have a completed
    * observation_generation_jobs row. Tenant-scoped: rows are filtered by
    * (project_id, team_id) before any join.

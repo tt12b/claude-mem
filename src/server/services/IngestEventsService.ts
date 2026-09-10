@@ -49,6 +49,22 @@ function buildEventBullmqPayload(input: {
 
 const EVENT_JOB_TYPE = 'observation_generate_for_event';
 
+/**
+ * Whether ingesting an event should also queue a generation job for it.
+ *
+ * One job per event means one provider call per tool use, which exhausts a
+ * free-tier quota within a single session. Turning this off leaves the events
+ * themselves untouched — they are still persisted — and lets the periodic
+ * summariser (PeriodicSummaryScheduler) collapse everything that accumulated
+ * into a single call. Defaults to on so existing deployments keep their
+ * behaviour; set CLAUDE_MEM_GENERATE_PER_EVENT=false to batch instead.
+ */
+function perEventGenerationEnabled(): boolean {
+  const raw = (process.env.CLAUDE_MEM_GENERATE_PER_EVENT ?? '').trim().toLowerCase();
+  if (raw === '') return true;
+  return !(raw === 'false' || raw === '0' || raw === 'no' || raw === 'off');
+}
+
 export type EnqueueOutcome = 'enqueued' | 'queued_only' | 'skipped';
 
 export interface IngestEventsServiceOptions {
@@ -90,7 +106,7 @@ export class IngestEventsService {
     input: CreatePostgresAgentEventInput,
     opts: IngestEventOptions = {},
   ): Promise<IngestEventResult> {
-    const generate = opts.generate ?? true;
+    const generate = opts.generate ?? perEventGenerationEnabled();
     const source = opts.source ?? 'http_post_v1_events';
 
     const txResult = await withPostgresTransaction(this.options.pool, async (client) => {
@@ -157,7 +173,7 @@ export class IngestEventsService {
     inputs: CreatePostgresAgentEventInput[],
     opts: IngestEventOptions = {},
   ): Promise<IngestEventResult[]> {
-    const generate = opts.generate ?? true;
+    const generate = opts.generate ?? perEventGenerationEnabled();
     const source = opts.source ?? 'http_post_v1_events_batch';
 
     const txResults = await withPostgresTransaction(this.options.pool, async (client) => {

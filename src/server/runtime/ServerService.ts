@@ -23,6 +23,7 @@ import { SessionsObservationsAdapter } from '../compat/SessionsObservationsAdapt
 import { SessionsSummarizeAdapter } from '../compat/SessionsSummarizeAdapter.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ServerViewerRoutes } from './ServerViewerRoutes.js';
+import { PeriodicSummaryScheduler } from '../services/PeriodicSummaryScheduler.js';
 import type { ServerServiceGraph, ServerQueueLaneMetric } from './types.js';
 
 // Phase 1d retains the persisted runtime literal `'server-beta'`. Renaming the
@@ -113,6 +114,7 @@ export class ServerService {
   private readonly persistRuntimeState: boolean;
   private server: Server | null = null;
   private stopping = false;
+  private summaryScheduler: PeriodicSummaryScheduler | null = null;
 
   constructor(options: ServerServiceOptions) {
     this.graph = options.graph;
@@ -216,6 +218,16 @@ export class ServerService {
 
     server.finalizeRoutes();
 
+    // Periodic summarisation. Queues one summary job per session that has
+    // events newer than its watermark, and nothing at all when idle — the
+    // batching that keeps a free-tier provider quota from being spent one
+    // call per tool use. Disabled by setting the interval to 0.
+    this.summaryScheduler = new PeriodicSummaryScheduler({
+      pool: this.graph.postgres.pool,
+      resolveSummaryQueue: () => v1Routes.resolveSummaryQueueForScheduler() as never,
+    });
+    this.summaryScheduler.start();
+
     await server.listen(this.requestedPort, this.host);
     this.server = server;
     this.boundPort = resolveBoundPort(server) ?? this.requestedPort;
@@ -230,6 +242,8 @@ export class ServerService {
       return;
     }
     this.stopping = true;
+    this.summaryScheduler?.stop();
+    this.summaryScheduler = null;
     try {
       if (this.server) {
         try {
