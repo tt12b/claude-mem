@@ -34,14 +34,51 @@ export interface FailoverCandidate {
   readonly provider: ServerGenerationProvider;
 }
 
+export interface FailoverOptions {
+  /**
+   * Model the operator picked, read fresh before each job. The worker builds
+   * its provider once at startup, so without a per-call lookup a dashboard
+   * change would not take effect until the container restarted.
+   */
+  readonly resolvePreferredModel?: () => Promise<string | null>;
+}
+
 export class FailoverObservationProvider implements ServerGenerationProvider {
   readonly providerLabel: ServerGenerationProvider['providerLabel'];
 
-  constructor(private readonly candidates: readonly FailoverCandidate[]) {
+  constructor(
+    private readonly candidates: readonly FailoverCandidate[],
+    private readonly options: FailoverOptions = {},
+  ) {
     if (candidates.length === 0) {
       throw new Error('FailoverObservationProvider requires at least one candidate');
     }
     this.providerLabel = candidates[0]!.provider.providerLabel;
+  }
+
+  /**
+   * Candidates with the operator's pick moved to the front. The rest keep
+   * their configured order, so a preference changes which model is tried
+   * first without giving up the fallback chain behind it.
+   */
+  private async orderedCandidates(): Promise<readonly FailoverCandidate[]> {
+    const resolve = this.options.resolvePreferredModel;
+    if (!resolve) return this.candidates;
+
+    let preferred: string | null = null;
+    try {
+      preferred = await resolve();
+    } catch (error: unknown) {
+      logger.debug('SYSTEM', 'preferred model lookup failed; using configured order', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return this.candidates;
+    }
+
+    if (!preferred) return this.candidates;
+    const index = this.candidates.findIndex(candidate => candidate.modelId === preferred);
+    if (index <= 0) return this.candidates;
+    return [this.candidates[index]!, ...this.candidates.filter((_, i) => i !== index)];
   }
 
   async generate(
@@ -49,15 +86,16 @@ export class FailoverObservationProvider implements ServerGenerationProvider {
     signal?: AbortSignal,
   ): Promise<ServerGenerationResult> {
     let lastError: unknown;
+    const candidates = await this.orderedCandidates();
 
-    for (let index = 0; index < this.candidates.length; index++) {
-      const candidate = this.candidates[index]!;
+    for (let index = 0; index < candidates.length; index++) {
+      const candidate = candidates[index]!;
       try {
         return await candidate.provider.generate(context, signal);
       } catch (error: unknown) {
         lastError = error;
         const kind = classificationOf(error);
-        const isLast = index === this.candidates.length - 1;
+        const isLast = index === candidates.length - 1;
 
         if (!kind || !FAILOVER_KINDS.has(kind) || isLast) {
           throw error;
@@ -66,7 +104,7 @@ export class FailoverObservationProvider implements ServerGenerationProvider {
         logger.warn('SYSTEM', 'model out of quota; falling back to next candidate', {
           jobId: context.job.id,
           exhaustedModel: candidate.modelId,
-          nextModel: this.candidates[index + 1]!.modelId,
+          nextModel: candidates[index + 1]!.modelId,
           classification: kind,
           message: error instanceof Error ? error.message : String(error),
         });

@@ -1218,6 +1218,31 @@
       font-size: 12px;
     }
 
+    /* The name doubles as the selector. Styled flat so the row still reads as
+       a list rather than a form. */
+    .model-select {
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      color: inherit;
+      text-align: left;
+    }
+
+    .model-select:disabled {
+      cursor: default;
+      opacity: 0.6;
+    }
+
+    .model-select:not(:disabled):hover {
+      text-decoration: underline;
+    }
+
+    .model-tag-pick {
+      border-color: var(--color-success, #3fb950);
+      color: var(--color-success, #3fb950);
+    }
+
     .model-dot {
       color: var(--color-success, #3fb950);
       font-size: 9px;

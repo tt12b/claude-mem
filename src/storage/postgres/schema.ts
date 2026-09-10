@@ -336,4 +336,14 @@ CREATE TABLE IF NOT EXISTS rate_limit_counters (
   PRIMARY KEY (subject_id, window_start)
 );
 CREATE INDEX IF NOT EXISTS idx_rate_limit_counters_window ON rate_limit_counters(window_start);
+
+-- Operator-set runtime settings. The server and the generation worker run as
+-- separate containers, so a value the dashboard changes cannot travel through
+-- the environment — it has to live somewhere both processes read. Small and
+-- deliberately untyped: one row per knob.
+CREATE TABLE IF NOT EXISTS server_settings (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `;

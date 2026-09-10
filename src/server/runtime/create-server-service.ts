@@ -258,6 +258,24 @@ function buildServerGenerationProviderFromEnv(): ServerGenerationProvider | null
  * Model candidates in preference order. Blank entries are dropped so a
  * trailing comma or an unset override cannot yield an empty model id.
  */
+/**
+ * The operator's dashboard pick, read fresh per job. Returns null on any
+ * problem (table not yet created, database blip) so generation falls back to
+ * the configured order rather than failing over a preference lookup.
+ */
+async function readPreferredModel(): Promise<string | null> {
+  try {
+    const { getSharedPostgresPool } = await import('../../storage/postgres/index.js');
+    const { PostgresServerSettingsRepository, PREFERRED_MODEL_KEY } =
+      await import('../../storage/postgres/server-settings.js');
+    const repo = new PostgresServerSettingsRepository(getSharedPostgresPool({ requireDatabaseUrl: true }));
+    const value = await repo.get<string>(PREFERRED_MODEL_KEY);
+    return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 function parseModelList(raw: string | undefined): string[] {
   return (raw ?? '')
     .split(',')
@@ -281,10 +299,13 @@ function instantiateServerGenerationProvider(provider: string): ServerGeneration
     // usable; the failover wrapper walks the list on quota errors.
     const models = parseModelList(process.env.CLAUDE_MEM_SERVER_MODEL);
     if (models.length > 1) {
-      return new FailoverObservationProvider(models.map(model => ({
-        modelId: model,
-        provider: new GeminiObservationProvider({ apiKey, model }),
-      })));
+      return new FailoverObservationProvider(
+        models.map(model => ({
+          modelId: model,
+          provider: new GeminiObservationProvider({ apiKey, model }),
+        })),
+        { resolvePreferredModel: readPreferredModel },
+      );
     }
     const opts: { apiKey: string; model?: string } = { apiKey };
     if (models[0]) opts.model = models[0];

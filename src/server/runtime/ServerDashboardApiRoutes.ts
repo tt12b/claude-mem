@@ -21,9 +21,11 @@
 // on a private network; do not expose it publicly without putting auth in
 // front of the whole surface.
 
+import express from 'express';
 import type { Application, Request, Response } from 'express';
 import type { RouteHandler } from '../../services/server/Server.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
+import { PostgresServerSettingsRepository, PREFERRED_MODEL_KEY } from '../../storage/postgres/server-settings.js';
 import { logger } from '../../utils/logger.js';
 
 const DEFAULT_LIMIT = 50;
@@ -112,6 +114,10 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     app.get('/api/settings', this.wrap(this.handleSettings));
     app.get('/api/usage', this.wrap(this.handleUsage));
     app.get('/api/models', this.wrap(this.handleModels));
+    // The only write on this surface. Same unauthenticated posture as the
+    // rest of the dashboard: it changes which model is tried first, nothing
+    // that leaves the deployment.
+    app.post('/api/models/active', express.json(), this.wrap(this.handleSelectModel));
     app.get('/api/context/preview', this.wrap(this.handleContextPreview));
     app.get('/api/logs', (_req: Request, res: Response) => {
       // The worker streams its own log file here. The server runtime logs to
@@ -377,6 +383,11 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       if (limit && model && !limitByModel.has(model)) limitByModel.set(model, Number(limit));
     }
 
+    const preferred = await new PostgresServerSettingsRepository(this.options.pool)
+      .get<string>(PREFERRED_MODEL_KEY)
+      .catch(() => null);
+    // "Active" is what last worked; "preferred" is what the operator asked to
+    // try first. They differ while a preferred model is out of quota.
     const activeModel = active.rows[0]?.model ?? configured[0] ?? null;
     // A model can appear in usage without being configured any more (the list
     // was edited); show those too so past spend does not silently vanish.
@@ -390,6 +401,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       windowDays: days,
       provider: process.env.CLAUDE_MEM_SERVER_PROVIDER ?? null,
       activeModel,
+      preferredModel: preferred ?? null,
       models: names.map(name => {
         const c = callsByModel.get(name) ?? { succeeded: 0, failed: 0 };
         const used = c.succeeded + c.failed;
@@ -398,6 +410,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
           name,
           configured: configured.includes(name),
           active: name === activeModel,
+          preferred: name === preferred,
           priority: configured.indexOf(name),
           calls: { total: used, succeeded: c.succeeded, failed: c.failed },
           tokens: tokensByModel.get(name) ?? 0,
@@ -409,6 +422,41 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         return a.priority - b.priority;
       }),
     });
+  }
+
+  /**
+   * Pick the model to try first.
+   *
+   * Stored in Postgres rather than the environment because the worker that
+   * actually calls the provider is a different container — it reads this
+   * before each job, so the change lands without a restart. Only a model
+   * already in the configured candidate list is accepted; anything else
+   * would silently never be reachable by the failover chain.
+   */
+  private async handleSelectModel(req: Request, res: Response): Promise<void> {
+    const body = (req.body ?? {}) as { model?: unknown };
+    const model = typeof body.model === 'string' ? body.model.trim() : '';
+    const configured = (process.env.CLAUDE_MEM_SERVER_MODEL ?? '')
+      .split(',')
+      .map(entry => entry.trim())
+      .filter(entry => entry.length > 0);
+
+    if (!model) {
+      res.status(400).json({ error: 'BadRequest', message: 'model is required' });
+      return;
+    }
+    if (!configured.includes(model)) {
+      res.status(400).json({
+        error: 'BadRequest',
+        message: `model is not in the configured list: ${configured.join(', ')}`,
+      });
+      return;
+    }
+
+    const repo = new PostgresServerSettingsRepository(this.options.pool);
+    await repo.set(PREFERRED_MODEL_KEY, model);
+    logger.info('SYSTEM', 'preferred generation model changed', { model });
+    res.json({ ok: true, model });
   }
 
   private page<T>(rows: T[], limit: number): { items: T[]; hasMore: boolean } {

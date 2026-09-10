@@ -74,10 +74,13 @@ export interface ModelReport {
   windowDays: number;
   provider: string | null;
   activeModel: string | null;
+  /** What the operator asked to try first; differs from active when spent. */
+  preferredModel: string | null;
   models: Array<{
     name: string;
     configured: boolean;
     active: boolean;
+    preferred: boolean;
     priority: number;
     calls: { total: number; succeeded: number; failed: number };
     tokens: number;
