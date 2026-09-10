@@ -23,6 +23,7 @@ import { SessionsObservationsAdapter } from '../compat/SessionsObservationsAdapt
 import { SessionsSummarizeAdapter } from '../compat/SessionsSummarizeAdapter.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ServerViewerRoutes } from './ServerViewerRoutes.js';
+import { ServerDashboardApiRoutes } from './ServerDashboardApiRoutes.js';
 import { PeriodicSummaryScheduler } from '../services/PeriodicSummaryScheduler.js';
 import type { ServerServiceGraph, ServerQueueLaneMetric } from './types.js';
 
@@ -214,6 +215,11 @@ export class ServerService {
     // viewer's own API calls resolve against those; express.static only
     // matches existing files and the `/` GET only matches the root, so this
     // never shadows an API route.
+    // Dashboard data API. Registered BEFORE the viewer's static handler so
+    // the /api/* and /stream routes resolve before express.static gets a
+    // chance to look for files with those names.
+    server.registerRoutes(new ServerDashboardApiRoutes({ pool: this.graph.postgres.pool }));
+
     server.registerRoutes(new ServerViewerRoutes());
 
     server.finalizeRoutes();

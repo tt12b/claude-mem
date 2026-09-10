@@ -1,0 +1,367 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Dashboard data API for the server runtime.
+//
+// ServerViewerRoutes serves plugin/ui/viewer.html, but the bundle then calls
+// /api/observations, /api/summaries, /api/prompts, /api/settings and /stream —
+// routes that only ever existed on the in-plugin worker, which reads SQLite.
+// On the server runtime every one of them 404s, so the page loads and stays
+// empty. These handlers answer the same contract out of Postgres.
+//
+// Shape notes (src/ui/viewer/types.ts is the source of truth):
+//   - list endpoints take ?offset&limit&project and return { items, hasMore }
+//   - `id` is typed as number there but is only ever used as a React key and
+//     for de-duplication, so the Postgres uuid string is fine
+//   - a summary is an observation with kind='summary'; the viewer reads its
+//     request/investigated/learned/completed/next_steps out of metadata
+//   - a prompt is an agent_event with event_type='user_prompt'
+//
+// These are read-only and unauthenticated, matching the viewer page itself
+// (ServerViewerRoutes mounts `/` with no auth). The server is expected to sit
+// on a private network; do not expose it publicly without putting auth in
+// front of the whole surface.
+
+import type { Application, Request, Response } from 'express';
+import type { RouteHandler } from '../../services/server/Server.js';
+import type { PostgresPool } from '../../storage/postgres/pool.js';
+import { logger } from '../../utils/logger.js';
+
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+/** How often an open /stream connection looks for rows it has not sent yet. */
+const STREAM_POLL_MS = 3_000;
+const STREAM_HEARTBEAT_MS = 25_000;
+
+interface PageQuery {
+  offset: number;
+  limit: number;
+  project: string | null;
+}
+
+function parsePageQuery(req: Request): PageQuery {
+  const rawOffset = Number.parseInt(String(req.query.offset ?? '0'), 10);
+  const rawLimit = Number.parseInt(String(req.query.limit ?? String(DEFAULT_LIMIT)), 10);
+  const project = typeof req.query.project === 'string' && req.query.project.trim() !== ''
+    ? req.query.project.trim()
+    : null;
+  return {
+    offset: Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0,
+    limit: Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_LIMIT) : DEFAULT_LIMIT,
+    project,
+  };
+}
+
+/**
+ * The viewer groups by a human-readable project name. The server stores the
+ * cwd-derived label the client sent on session start
+ * (`server_sessions.metadata->>'project'`) and falls back to the project row's
+ * own name when a session predates that.
+ */
+const PROJECT_LABEL_SQL = `COALESCE(s.metadata->>'project', p.name, 'unknown')`;
+
+function toEpoch(value: Date | string | null): number {
+  if (!value) return 0;
+  return value instanceof Date ? value.getTime() : new Date(value).getTime();
+}
+
+function asText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.join('\n');
+  return JSON.stringify(value);
+}
+
+export interface ServerDashboardApiRoutesOptions {
+  pool: PostgresPool;
+}
+
+export class ServerDashboardApiRoutes implements RouteHandler {
+  constructor(private readonly options: ServerDashboardApiRoutesOptions) {}
+
+  setupRoutes(app: Application): void {
+    app.get('/api/observations', this.wrap(this.handleObservations));
+    app.get('/api/summaries', this.wrap(this.handleSummaries));
+    app.get('/api/prompts', this.wrap(this.handlePrompts));
+    app.get('/api/projects', this.wrap(this.handleProjects));
+    app.get('/api/settings', this.wrap(this.handleSettings));
+    app.get('/api/logs', (_req: Request, res: Response) => {
+      // The worker streams its own log file here. The server runtime logs to
+      // the container's stdout/log file instead, so report empty rather than
+      // 404 — the viewer's log modal then renders as "nothing to show".
+      res.json({ logs: [] });
+    });
+    app.get('/stream', this.handleStream.bind(this));
+  }
+
+  private wrap(handler: (req: Request, res: Response) => Promise<void>) {
+    const bound = handler.bind(this);
+    return (req: Request, res: Response) => {
+      bound(req, res).catch((error: unknown) => {
+        logger.warn('SYSTEM', 'dashboard api handler failed', {
+          path: req.path,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'InternalError', message: 'dashboard query failed' });
+        }
+      });
+    };
+  }
+
+  // ---------------------------------------------------------------- lists
+
+  private async handleObservations(req: Request, res: Response): Promise<void> {
+    const { offset, limit, project } = parsePageQuery(req);
+    const rows = await this.queryObservations({ offset, limit: limit + 1, project, summaries: false });
+    res.json(this.page(rows, limit));
+  }
+
+  private async handleSummaries(req: Request, res: Response): Promise<void> {
+    const { offset, limit, project } = parsePageQuery(req);
+    const rows = await this.queryObservations({ offset, limit: limit + 1, project, summaries: true });
+    res.json(this.page(rows, limit));
+  }
+
+  private async handlePrompts(req: Request, res: Response): Promise<void> {
+    const { offset, limit, project } = parsePageQuery(req);
+    const rows = await this.queryPrompts({ offset, limit: limit + 1, project });
+    res.json(this.page(rows, limit));
+  }
+
+  private async handleProjects(_req: Request, res: Response): Promise<void> {
+    const projects = await this.listProjects();
+    res.json({ projects, sources: ['claude-code'], projectsBySource: { 'claude-code': projects } });
+  }
+
+  private async handleSettings(_req: Request, res: Response): Promise<void> {
+    // Read-only mirror of the knobs that actually drive this deployment. The
+    // viewer merges whatever it gets over its own defaults.
+    res.json({
+      CLAUDE_MEM_MODEL: process.env.CLAUDE_MEM_SERVER_MODEL ?? '',
+      CLAUDE_MEM_PROVIDER: process.env.CLAUDE_MEM_SERVER_PROVIDER ?? '',
+      CLAUDE_MEM_WORKER_HOST: process.env.CLAUDE_MEM_SERVER_HOST ?? '0.0.0.0',
+      CLAUDE_MEM_WORKER_PORT: process.env.CLAUDE_MEM_SERVER_PORT ?? '37877',
+      CLAUDE_MEM_CONTEXT_OBSERVATIONS: process.env.CLAUDE_MEM_CONTEXT_OBSERVATIONS ?? '50',
+      CLAUDE_MEM_GENERATE_PER_EVENT: process.env.CLAUDE_MEM_GENERATE_PER_EVENT ?? 'true',
+      CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES: process.env.CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES ?? '10',
+    });
+  }
+
+  private page<T>(rows: T[], limit: number): { items: T[]; hasMore: boolean } {
+    // Handlers over-fetch by one row; its presence is the hasMore signal.
+    const hasMore = rows.length > limit;
+    return { items: hasMore ? rows.slice(0, limit) : rows, hasMore };
+  }
+
+  // -------------------------------------------------------------- queries
+
+  private async queryObservations(input: {
+    offset: number;
+    limit: number;
+    project: string | null;
+    summaries: boolean;
+    sinceEpoch?: number;
+  }): Promise<Record<string, unknown>[]> {
+    const kindClause = input.summaries ? `o.kind = 'summary'` : `o.kind <> 'summary'`;
+    const params: unknown[] = [input.limit, input.offset];
+    let projectClause = '';
+    if (input.project) {
+      params.push(input.project);
+      projectClause = `AND ${PROJECT_LABEL_SQL} = $${params.length}`;
+    }
+    let sinceClause = '';
+    if (input.sinceEpoch) {
+      params.push(new Date(input.sinceEpoch));
+      sinceClause = `AND o.created_at > $${params.length}`;
+    }
+
+    const result = await this.options.pool.query<Record<string, unknown>>(
+      `
+        SELECT o.id, o.kind, o.content, o.metadata, o.created_at,
+               o.server_session_id,
+               ${PROJECT_LABEL_SQL} AS project_label,
+               s.platform_source
+        FROM observations o
+        LEFT JOIN server_sessions s ON s.id = o.server_session_id
+        LEFT JOIN projects p ON p.id = o.project_id
+        WHERE ${kindClause}
+          ${projectClause}
+          ${sinceClause}
+        ORDER BY o.created_at DESC
+        LIMIT $1 OFFSET $2
+      `,
+      params,
+    );
+
+    return result.rows.map(row => (input.summaries ? this.toSummary(row) : this.toObservation(row)));
+  }
+
+  private async queryPrompts(input: {
+    offset: number;
+    limit: number;
+    project: string | null;
+    sinceEpoch?: number;
+  }): Promise<Record<string, unknown>[]> {
+    const params: unknown[] = [input.limit, input.offset];
+    let projectClause = '';
+    if (input.project) {
+      params.push(input.project);
+      projectClause = `AND ${PROJECT_LABEL_SQL} = $${params.length}`;
+    }
+    let sinceClause = '';
+    if (input.sinceEpoch) {
+      params.push(new Date(input.sinceEpoch));
+      sinceClause = `AND e.occurred_at > $${params.length}`;
+    }
+
+    const result = await this.options.pool.query<Record<string, unknown>>(
+      `
+        SELECT e.id, e.payload, e.occurred_at, e.platform_source,
+               s.content_session_id,
+               ${PROJECT_LABEL_SQL} AS project_label
+        FROM agent_events e
+        LEFT JOIN server_sessions s ON s.id = e.server_session_id
+        LEFT JOIN projects p ON p.id = e.project_id
+        WHERE e.event_type = 'user_prompt'
+          ${projectClause}
+          ${sinceClause}
+        ORDER BY e.occurred_at DESC
+        LIMIT $1 OFFSET $2
+      `,
+      params,
+    );
+
+    return result.rows.map(row => this.toPrompt(row));
+  }
+
+  private async listProjects(): Promise<string[]> {
+    const result = await this.options.pool.query<{ label: string }>(
+      `
+        SELECT DISTINCT COALESCE(s.metadata->>'project', p.name, 'unknown') AS label
+        FROM server_sessions s
+        LEFT JOIN projects p ON p.id = s.project_id
+        ORDER BY label
+      `,
+      [],
+    );
+    return result.rows.map(row => row.label).filter(Boolean);
+  }
+
+  // --------------------------------------------------------------- mapping
+
+  private toObservation(row: Record<string, unknown>): Record<string, unknown> {
+    const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+    return {
+      id: row.id,
+      memory_session_id: row.server_session_id ?? '',
+      project: row.project_label ?? 'unknown',
+      platform_source: row.platform_source ?? 'claude-code',
+      type: row.kind ?? 'observation',
+      title: asText(metadata.title),
+      subtitle: asText(metadata.subtitle),
+      narrative: asText(metadata.narrative),
+      text: asText(row.content),
+      facts: asText(metadata.facts),
+      concepts: asText(metadata.concepts),
+      files_read: asText(metadata.files_read),
+      files_modified: asText(metadata.files_modified),
+      prompt_number: null,
+      created_at: row.created_at,
+      created_at_epoch: toEpoch(row.created_at as Date | string | null),
+    };
+  }
+
+  private toSummary(row: Record<string, unknown>): Record<string, unknown> {
+    const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+    return {
+      id: row.id,
+      session_id: row.server_session_id ?? '',
+      project: row.project_label ?? 'unknown',
+      platform_source: row.platform_source ?? 'claude-code',
+      request: asText(metadata.request) ?? undefined,
+      investigated: asText(metadata.investigated) ?? undefined,
+      learned: asText(metadata.learned) ?? undefined,
+      completed: asText(metadata.completed) ?? undefined,
+      next_steps: asText(metadata.next_steps) ?? undefined,
+      created_at_epoch: toEpoch(row.created_at as Date | string | null),
+    };
+  }
+
+  private toPrompt(row: Record<string, unknown>): Record<string, unknown> {
+    const payload = (row.payload ?? {}) as Record<string, unknown>;
+    return {
+      id: row.id,
+      content_session_id: row.content_session_id ?? '',
+      project: row.project_label ?? 'unknown',
+      platform_source: row.platform_source ?? 'claude-code',
+      prompt_number: 0,
+      prompt_text: asText(payload.prompt) ?? '',
+      created_at_epoch: toEpoch(row.occurred_at as Date | string | null),
+    };
+  }
+
+  // ------------------------------------------------------------------ SSE
+
+  /**
+   * The viewer opens /stream and expects an `initial_load` followed by
+   * new_observation / new_summary / new_prompt as work lands. Postgres has no
+   * change feed wired here, so the connection polls for rows newer than the
+   * last one it sent. The page is a dashboard for one operator, so a short
+   * poll is cheaper than adding LISTEN/NOTIFY plumbing.
+   */
+  private handleStream(req: Request, res: Response): void {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const send = (payload: unknown) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    let closed = false;
+    // Only rows created after the connection opened are pushed; the initial
+    // page content comes from the paginated endpoints.
+    let watermark = Date.now();
+
+    const poll = async () => {
+      if (closed) return;
+      const since = watermark;
+      const nextWatermark = Date.now();
+      try {
+        const [observations, summaries, prompts] = await Promise.all([
+          this.queryObservations({ offset: 0, limit: MAX_LIMIT, project: null, summaries: false, sinceEpoch: since }),
+          this.queryObservations({ offset: 0, limit: MAX_LIMIT, project: null, summaries: true, sinceEpoch: since }),
+          this.queryPrompts({ offset: 0, limit: MAX_LIMIT, project: null, sinceEpoch: since }),
+        ]);
+        for (const observation of observations.reverse()) send({ type: 'new_observation', observation });
+        for (const summary of summaries.reverse()) send({ type: 'new_summary', summary });
+        for (const prompt of prompts.reverse()) send({ type: 'new_prompt', prompt });
+        watermark = nextWatermark;
+      } catch (error) {
+        logger.warn('SYSTEM', 'dashboard stream poll failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+
+    void this.listProjects()
+      .then(projects => send({ type: 'initial_load', projects }))
+      .catch(() => send({ type: 'initial_load', projects: [] }));
+
+    const pollTimer = setInterval(() => void poll(), STREAM_POLL_MS);
+    // A comment frame keeps proxies from closing an idle connection.
+    const heartbeatTimer = setInterval(() => res.write(': keepalive\n\n'), STREAM_HEARTBEAT_MS);
+
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(pollTimer);
+      clearInterval(heartbeatTimer);
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+  }
+}
