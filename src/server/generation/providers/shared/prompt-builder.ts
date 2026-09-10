@@ -40,6 +40,28 @@ export interface BuildServerPromptResult {
 
 const MAX_PAYLOAD_CHARS = 16 * 1024;
 
+/**
+ * Language for the human-readable fields of an observation.
+ *
+ * The model defaults to English, which is wrong for an operator who reads the
+ * dashboard in their own language. Set CLAUDE_MEM_OBSERVATION_LANGUAGE to a
+ * language name (e.g. `Korean`) to have title/subtitle/facts/narrative come
+ * back in it. Structural values — the XML tags, the observation `type`, file
+ * paths, identifiers, code — stay as they are so parsing and search do not
+ * change with the setting.
+ */
+function languageDirective(): string[] {
+  const language = (process.env.CLAUDE_MEM_OBSERVATION_LANGUAGE ?? '').trim();
+  if (!language) return [];
+  return [
+    '',
+    `Write every human-readable field in ${language}: title, subtitle, facts,`,
+    'narrative, and concepts. Keep the XML tag names, the observation type',
+    'value, file paths, identifiers, commands, and code excerpts exactly as',
+    'they appear — translate the prose around them, not the symbols.',
+  ];
+}
+
 export function buildServerGenerationPrompt(
   context: ServerGenerationContext,
   options: { mode?: ModeConfig } = {},
@@ -91,6 +113,7 @@ export function buildServerGenerationPrompt(
     '',
     'Schema for each <observation> block:',
     observationOutputSchema,
+    ...languageDirective(),
   ].join('\n');
 
   return { prompt, hadPrivateContent, skippedAll };

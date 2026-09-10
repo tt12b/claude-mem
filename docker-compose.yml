@@ -186,6 +186,8 @@ services:
       CLAUDE_MEM_SERVER_PROVIDER: ${CLAUDE_MEM_SERVER_PROVIDER:-claude}
       # 토큰 소비량 기록(opt-in). 대시보드의 /api/usage 가 이 값으로 채워진다.
       CLAUDE_MEM_USAGE_METERING: ${CLAUDE_MEM_USAGE_METERING:-1}
+      # 관측치의 사람이 읽는 필드를 이 언어로 생성한다. 비우면 모델 기본값(영어).
+      CLAUDE_MEM_OBSERVATION_LANGUAGE: ${CLAUDE_MEM_OBSERVATION_LANGUAGE:-Korean}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MEM_ANTHROPIC_API_KEY: ${CLAUDE_MEM_ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
