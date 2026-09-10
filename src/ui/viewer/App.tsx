@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { Feed } from './components/Feed';
 import { UsagePanel } from './components/UsagePanel';
+import { ModelPanel } from './components/ModelPanel';
 import { ContextSettingsModal } from './components/ContextSettingsModal';
 import { LogsDrawer } from './components/LogsModal';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
@@ -120,6 +121,8 @@ export function App() {
           setWelcomeDismissed(false);
         }}
       />
+
+      <ModelPanel />
 
       <UsagePanel />
 

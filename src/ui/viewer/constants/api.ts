@@ -4,6 +4,7 @@ export const API_ENDPOINTS = {
   PROMPTS: '/api/prompts',
   MESSAGES: '/api/messages',
   USAGE: '/api/usage',
+  MODELS: '/api/models',
   SETTINGS: '/api/settings',
   STREAM: '/stream',
 } as const;

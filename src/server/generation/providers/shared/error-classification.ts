@@ -70,6 +70,21 @@ interface ClassifyHttpInput {
  * Anthropic OverloadedError, Gemini quota body markers) are layered on top
  * by the per-provider classifier wrappers in this module.
  */
+/**
+ * Pull `limit: <n>` and `model: <id>` out of a provider quota message.
+ * Returns null when the body carries neither, so a provider that does not
+ * report its ceiling simply adds nothing to the message.
+ */
+export function extractQuotaDetail(body: string): string | null {
+  if (!body) return null;
+  const limit = /\blimit:\s*([0-9]+)/i.exec(body)?.[1] ?? null;
+  const model = /\bmodel:\s*([A-Za-z0-9._-]+)/i.exec(body)?.[1] ?? null;
+  const parts: string[] = [];
+  if (limit) parts.push(`limit=${limit}`);
+  if (model) parts.push(`model=${model}`);
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
 export function classifyHttpProviderError(input: ClassifyHttpInput): ServerClassifiedProviderError {
   const { status, providerLabel } = input;
   const body = input.bodyText ?? '';
@@ -91,8 +106,15 @@ export function classifyHttpProviderError(input: ClassifyHttpInput): ServerClass
     lower.includes('negative credit') ||
     status === 402
   ) {
+    // Google reports the ceiling it enforced right in the 429 body
+    // ("limit: 20, model: gemini-3.8-flash"). There is no quota-remaining
+    // API for an AI Studio key, so this is the only place the number is
+    // ever visible — carry it in the message so the failure row keeps it and
+    // the dashboard can show headroom instead of guessing.
+    const quotaDetail = extractQuotaDetail(body);
     return new ServerClassifiedProviderError(
-      `${providerLabel} quota exhausted${status !== undefined ? ` (status ${status})` : ''}`,
+      `${providerLabel} quota exhausted${status !== undefined ? ` (status ${status})` : ''}`
+        + (quotaDetail ? ` [${quotaDetail}]` : ''),
       { kind: 'quota_exhausted', cause },
     );
   }

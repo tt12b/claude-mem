@@ -111,6 +111,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     app.get('/api/projects', this.wrap(this.handleProjects));
     app.get('/api/settings', this.wrap(this.handleSettings));
     app.get('/api/usage', this.wrap(this.handleUsage));
+    app.get('/api/models', this.wrap(this.handleModels));
     app.get('/api/context/preview', this.wrap(this.handleContextPreview));
     app.get('/api/logs', (_req: Request, res: Response) => {
       // The worker streams its own log file here. The server runtime logs to
@@ -296,6 +297,118 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       .filter(text => text.trim().length > 0)
       .join('\n\n');
     res.send(body);
+  }
+
+  /**
+   * Configured models and what each has spent.
+   *
+   * `CLAUDE_MEM_SERVER_MODEL` is an ordered candidate list; generation walks
+   * it and falls through on quota errors, so "active" is not the first entry
+   * but whichever model last produced a completed job.
+   *
+   * There is no quota-remaining read for an AI Studio key, so `limit` is
+   * whatever Google last reported while refusing a request (captured from the
+   * 429 body into the failure row). Until a model has been refused once its
+   * ceiling is simply unknown, and `remaining` stays null rather than being
+   * invented.
+   */
+  private async handleModels(req: Request, res: Response): Promise<void> {
+    const rawDays = Number.parseInt(String(req.query.days ?? '1'), 10);
+    const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 30) : 1;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const configured = (process.env.CLAUDE_MEM_SERVER_MODEL ?? '')
+      .split(',')
+      .map(entry => entry.trim())
+      .filter(entry => entry.length > 0);
+
+    const [calls, tokens, active, limits] = await Promise.all([
+      this.options.pool.query<{ model: string | null; event_type: string; count: string }>(
+        `SELECT details->>'model' AS model, event_type, count(*)::text AS count
+           FROM observation_generation_job_events
+          WHERE event_type IN ('completed', 'failed') AND created_at >= $1
+          GROUP BY 1, 2`,
+        [since],
+      ),
+      this.options.pool.query<{ model: string | null; total: string }>(
+        `SELECT metadata->>'model' AS model, COALESCE(sum(quantity), 0)::text AS total
+           FROM usage_events
+          WHERE kind = 'tokens' AND created_at >= $1
+          GROUP BY 1`,
+        [since],
+      ),
+      this.options.pool.query<{ model: string | null }>(
+        `SELECT details->>'model' AS model
+           FROM observation_generation_job_events
+          WHERE event_type = 'completed' AND details->>'model' IS NOT NULL
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [],
+      ),
+      // The ceiling Google last enforced, parsed out of the quota message.
+      this.options.pool.query<{ reason: string | null }>(
+        `SELECT last_error->>'reason' AS reason
+           FROM observation_generation_jobs
+          WHERE status = 'failed' AND last_error->>'reason' LIKE '%limit=%'
+          ORDER BY updated_at DESC
+          LIMIT 50`,
+        [],
+      ),
+    ]);
+
+    const callsByModel = new Map<string, { succeeded: number; failed: number }>();
+    for (const row of calls.rows) {
+      const key = row.model ?? 'unknown';
+      const entry = callsByModel.get(key) ?? { succeeded: 0, failed: 0 };
+      if (row.event_type === 'completed') entry.succeeded += Number(row.count);
+      else entry.failed += Number(row.count);
+      callsByModel.set(key, entry);
+    }
+
+    const tokensByModel = new Map<string, number>(
+      tokens.rows.map(row => [row.model ?? 'unknown', Number(row.total)]),
+    );
+
+    const limitByModel = new Map<string, number>();
+    for (const row of limits.rows) {
+      const text = row.reason ?? '';
+      const limit = /limit=([0-9]+)/.exec(text)?.[1];
+      const model = /model=([A-Za-z0-9._-]+)/.exec(text)?.[1];
+      if (limit && model && !limitByModel.has(model)) limitByModel.set(model, Number(limit));
+    }
+
+    const activeModel = active.rows[0]?.model ?? configured[0] ?? null;
+    // A model can appear in usage without being configured any more (the list
+    // was edited); show those too so past spend does not silently vanish.
+    const names = Array.from(new Set([
+      ...configured,
+      ...callsByModel.keys(),
+      ...tokensByModel.keys(),
+    ])).filter(name => name !== 'unknown');
+
+    res.json({
+      windowDays: days,
+      provider: process.env.CLAUDE_MEM_SERVER_PROVIDER ?? null,
+      activeModel,
+      models: names.map(name => {
+        const c = callsByModel.get(name) ?? { succeeded: 0, failed: 0 };
+        const used = c.succeeded + c.failed;
+        const limit = limitByModel.get(name) ?? null;
+        return {
+          name,
+          configured: configured.includes(name),
+          active: name === activeModel,
+          priority: configured.indexOf(name),
+          calls: { total: used, succeeded: c.succeeded, failed: c.failed },
+          tokens: tokensByModel.get(name) ?? 0,
+          limit,
+          remaining: limit !== null ? Math.max(0, limit - used) : null,
+        };
+      }).sort((a, b) => {
+        if (a.configured !== b.configured) return a.configured ? -1 : 1;
+        return a.priority - b.priority;
+      }),
+    });
   }
 
   private page<T>(rows: T[], limit: number): { items: T[]; hasMore: boolean } {

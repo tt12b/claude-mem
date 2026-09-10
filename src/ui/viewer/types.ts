@@ -69,6 +69,24 @@ export interface StreamEvent {
   queueDepth?: number;
 }
 
+/** Response shape of /api/models — candidate list and per-model spend. */
+export interface ModelReport {
+  windowDays: number;
+  provider: string | null;
+  activeModel: string | null;
+  models: Array<{
+    name: string;
+    configured: boolean;
+    active: boolean;
+    priority: number;
+    calls: { total: number; succeeded: number; failed: number };
+    tokens: number;
+    /** Ceiling Google reported when refusing; null until it has refused once. */
+    limit: number | null;
+    remaining: number | null;
+  }>;
+}
+
 /** Response shape of /api/usage — provider spend for the current window. */
 export interface UsageReport {
   windowDays: number;
