@@ -84,6 +84,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     app.get('/api/prompts', this.wrap(this.handlePrompts));
     app.get('/api/projects', this.wrap(this.handleProjects));
     app.get('/api/settings', this.wrap(this.handleSettings));
+    app.get('/api/usage', this.wrap(this.handleUsage));
     app.get('/api/logs', (_req: Request, res: Response) => {
       // The worker streams its own log file here. The server runtime logs to
       // the container's stdout/log file instead, so report empty rather than
@@ -144,6 +145,80 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       CLAUDE_MEM_CONTEXT_OBSERVATIONS: process.env.CLAUDE_MEM_CONTEXT_OBSERVATIONS ?? '50',
       CLAUDE_MEM_GENERATE_PER_EVENT: process.env.CLAUDE_MEM_GENERATE_PER_EVENT ?? 'true',
       CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES: process.env.CLAUDE_MEM_SUMMARY_INTERVAL_MINUTES ?? '10',
+    });
+  }
+
+  /**
+   * Provider spend for the dashboard.
+   *
+   * Google exposes no quota-remaining read for an AI Studio key (the
+   * monitoring API rejects API-key auth outright), so this reports what was
+   * actually consumed instead of what is left. `observation_generation_job_events`
+   * has exactly one row per provider attempt, which makes it the call counter;
+   * `usage_events` carries the token totals the provider returned.
+   *
+   * `?days=` bounds the window (default 1, max 30).
+   */
+  private async handleUsage(req: Request, res: Response): Promise<void> {
+    const rawDays = Number.parseInt(String(req.query.days ?? '1'), 10);
+    const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 30) : 1;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const [calls, tokens, jobs, failures] = await Promise.all([
+      this.options.pool.query<{ event_type: string; count: string }>(
+        `SELECT event_type, count(*)::text AS count
+           FROM observation_generation_job_events
+          WHERE event_type IN ('completed', 'failed') AND created_at >= $1
+          GROUP BY event_type`,
+        [since],
+      ),
+      this.options.pool.query<{ provider: string | null; model: string | null; total: string }>(
+        `SELECT metadata->>'provider' AS provider,
+                metadata->>'model'    AS model,
+                COALESCE(sum(quantity), 0)::text AS total
+           FROM usage_events
+          WHERE kind = 'tokens' AND created_at >= $1
+          GROUP BY 1, 2`,
+        [since],
+      ),
+      this.options.pool.query<{ status: string; count: string }>(
+        `SELECT status, count(*)::text AS count
+           FROM observation_generation_jobs
+          WHERE created_at >= $1
+          GROUP BY status`,
+        [since],
+      ),
+      this.options.pool.query<{ classification: string | null; count: string }>(
+        `SELECT last_error->>'classification' AS classification, count(*)::text AS count
+           FROM observation_generation_jobs
+          WHERE status = 'failed' AND created_at >= $1
+          GROUP BY 1
+          ORDER BY 2 DESC`,
+        [since],
+      ),
+    ]);
+
+    const callCounts = Object.fromEntries(calls.rows.map(r => [r.event_type, Number(r.count)]));
+    const succeeded = callCounts.completed ?? 0;
+    const failed = callCounts.failed ?? 0;
+
+    res.json({
+      windowDays: days,
+      since: since.toISOString(),
+      provider: process.env.CLAUDE_MEM_SERVER_PROVIDER ?? null,
+      // One row per attempt, so this is the real request count against the
+      // provider's rate limit — not the number of observations produced.
+      calls: { total: succeeded + failed, succeeded, failed },
+      tokens: tokens.rows.map(r => ({
+        provider: r.provider,
+        model: r.model,
+        total: Number(r.total),
+      })),
+      jobs: Object.fromEntries(jobs.rows.map(r => [r.status, Number(r.count)])),
+      failureReasons: failures.rows.map(r => ({
+        classification: r.classification ?? 'unknown',
+        count: Number(r.count),
+      })),
     });
   }
 
