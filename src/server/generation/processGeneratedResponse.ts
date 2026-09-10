@@ -104,21 +104,35 @@ export async function processGeneratedResponse(
     privateContentDetected,
   );
 
-  // Cost/usage metering — AFTER the transaction commits, so a metering insert
-  // failure can NEVER roll back the observation + job writes (Greptile #3078: a
-  // failed insert aborts the tx, and the catch can't un-abort it). Opt-in;
-  // best-effort (logged); awaited so callers observe usage consistently.
-  if (outcome.kind === 'completed' && process.env.CLAUDE_MEM_USAGE_METERING === '1') {
-    try {
-      await recordUsageMetering(input, outcome.observations.length);
-    } catch (usageError) {
-      logger.warn('SYSTEM', 'usage metering record failed (post-commit)', {
-        jobId: input.job.id,
-        error: usageError instanceof Error ? usageError.message : String(usageError),
-      });
-    }
-  }
+  await meterIfCompleted(input, outcome);
   return outcome;
+}
+
+/**
+ * Cost/usage metering — AFTER the transaction commits, so a metering insert
+ * failure can NEVER roll back the observation + job writes (Greptile #3078: a
+ * failed insert aborts the tx, and the catch can't un-abort it). Opt-in;
+ * best-effort (logged); awaited so callers observe usage consistently.
+ *
+ * Shared by both pipelines. The summary path used to skip this, which went
+ * unnoticed while most jobs were per-event; once generation moved to periodic
+ * batching every job became a summary job and token spend stopped being
+ * recorded entirely.
+ */
+async function meterIfCompleted(
+  input: ProcessGeneratedResponseInput,
+  outcome: ProcessGeneratedResponseOutcome,
+): Promise<void> {
+  if (outcome.kind !== 'completed') return;
+  if (process.env.CLAUDE_MEM_USAGE_METERING !== '1') return;
+  try {
+    await recordUsageMetering(input, outcome.observations.length);
+  } catch (usageError) {
+    logger.warn('SYSTEM', 'usage metering record failed (post-commit)', {
+      jobId: input.job.id,
+      error: usageError instanceof Error ? usageError.message : String(usageError),
+    });
+  }
 }
 
 export interface MarkGenerationFailedInput {
@@ -221,7 +235,9 @@ export async function processSessionSummaryResponse(
         },
       }];
 
-  return persistGeneratedObservations(input, rendered, privateContentDetected);
+  const outcome = await persistGeneratedObservations(input, rendered, privateContentDetected);
+  await meterIfCompleted(input, outcome);
+  return outcome;
 }
 
 interface RenderedObservation {

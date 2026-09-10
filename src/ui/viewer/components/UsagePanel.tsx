@@ -82,16 +82,22 @@ export function UsagePanel() {
       </p>
 
       {usage.failureReasons.length > 0 && (
-        <ul className="usage-reasons">
-          {usage.failureReasons.map(reason => (
-            <li key={reason.classification}>
-              <span className="usage-reason-name">
-                {FAILURE_LABELS[reason.classification] ?? reason.classification}
-              </span>
-              <span className="usage-reason-count">{reason.count}건</span>
-            </li>
-          ))}
-        </ul>
+        <div className="usage-reasons-block">
+          {/* A breakdown of the failure count above, so a single reason
+              legitimately equals the total — label it to avoid reading as a
+              second, unrelated number. */}
+          <span className="usage-reasons-title">실패 {usage.calls.failed}건의 사유</span>
+          <ul className="usage-reasons">
+            {usage.failureReasons.map(reason => (
+              <li key={reason.classification}>
+                <span className="usage-reason-name">
+                  {FAILURE_LABELS[reason.classification] ?? reason.classification}
+                </span>
+                <span className="usage-reason-count">{reason.count}건</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
