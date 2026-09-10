@@ -89,6 +89,7 @@ services:
       retries: 12
 
   claude-mem-server:
+    image: ${CLAUDE_MEM_IMAGE:-ghcr.io/tt12b/claude-mem:latest}
     build:
       context: .
       dockerfile: docker/claude-mem/Dockerfile
@@ -139,6 +140,7 @@ services:
       start_period: 20s
 
   claude-mem-worker:
+    image: ${CLAUDE_MEM_IMAGE:-ghcr.io/tt12b/claude-mem:latest}
     build:
       context: .
       dockerfile: docker/claude-mem/Dockerfile
