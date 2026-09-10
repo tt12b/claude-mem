@@ -1210,6 +1210,24 @@
       color: var(--color-text-muted);
     }
 
+    .usage-note {
+      margin: 10px 0 0;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--color-text-muted);
+    }
+
+    /* Korean labels do not fit the uppercase/letter-spaced treatment that was
+       sized for short English words. */
+    .usage-stat-label {
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .usage-stat {
+      min-width: 84px;
+    }
+
     .usage-reasons {
       list-style: none;
       margin: 10px 0 0;

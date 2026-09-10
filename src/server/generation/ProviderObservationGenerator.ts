@@ -238,6 +238,11 @@ export class ProviderObservationGenerator {
       modelId: result.modelId,
       providerLabel: result.providerLabel,
       tokensUsed: result.tokensUsed,
+      // Events are loaded in ascending occurred_at order, so the last one is
+      // the high-water mark for this batch.
+      eventsWatermark: events.length > 0
+        ? new Date(events[events.length - 1]!.occurredAtEpoch)
+        : null,
       // Phase 11 — flow identity context from BullMQ payload into the
       // persistence layer so observations and audit rows carry the same
       // generation_job_id reference back through to the original API key.

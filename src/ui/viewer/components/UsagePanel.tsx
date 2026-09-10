@@ -5,12 +5,29 @@ import { API_ENDPOINTS } from '../constants/api';
 const REFRESH_MS = 30_000;
 
 /**
- * Provider spend for the current window.
+ * Failure reasons come back as the classifier's own identifiers
+ * (src/server/generation/providers/shared/error-classification.ts). They are
+ * meaningless to a reader, so map the ones that actually occur; anything new
+ * falls through as its raw id rather than being hidden.
+ */
+const FAILURE_LABELS: Record<string, string> = {
+  quota_exhausted: '무료 한도 소진',
+  insufficient_quota: '할당량 부족',
+  resource_exhausted: '리소스 초과',
+  rate_limit: '요청 속도 제한',
+  auth_invalid: '인증 실패',
+  parse_error: '응답 형식 오류',
+  transient: '일시적 오류',
+  unrecoverable: '복구 불가 오류',
+  unknown: '원인 미상',
+};
+
+/**
+ * What the provider was asked to do in this window.
  *
- * Gemini exposes no quota-remaining read for an AI Studio key, so this shows
- * consumption rather than headroom: how many calls went out, how many failed
- * and why. `quota_exhausted` dominating the failure list is the signal that
- * the free tier is spent.
+ * Gemini exposes no quota-remaining read for an AI Studio key, so this is
+ * consumption, not headroom. One call is one summarisation attempt — not one
+ * conversation and not one observation.
  */
 export function UsagePanel() {
   const [usage, setUsage] = useState<UsageReport | null>(null);
@@ -34,10 +51,10 @@ export function UsagePanel() {
   }, [load]);
 
   if (error) {
-    return <div className="usage-panel usage-panel-error">Usage unavailable: {error}</div>;
+    return <div className="usage-panel usage-panel-error">사용량을 불러오지 못했습니다: {error}</div>;
   }
   if (!usage) {
-    return <div className="usage-panel">Loading usage…</div>;
+    return <div className="usage-panel">사용량 불러오는 중…</div>;
   }
 
   const totalTokens = usage.tokens.reduce((sum, row) => sum + row.total, 0);
@@ -46,25 +63,32 @@ export function UsagePanel() {
   return (
     <div className="usage-panel">
       <div className="usage-header">
-        <span className="usage-title">Provider usage · last {usage.windowDays}d</span>
+        <span className="usage-title">요약 생성 사용량 · 최근 {usage.windowDays}일</span>
         <span className="usage-provider">
-          {usage.provider ?? 'unknown'}{model ? ` · ${model}` : ''}
+          {usage.provider ?? '미설정'}{model ? ` · ${model}` : ''}
         </span>
       </div>
 
       <div className="usage-stats">
-        <Stat label="Calls" value={usage.calls.total} />
-        <Stat label="Succeeded" value={usage.calls.succeeded} />
-        <Stat label="Failed" value={usage.calls.failed} tone={usage.calls.failed > 0 ? 'warn' : undefined} />
-        <Stat label="Tokens" value={totalTokens} />
+        <Stat label="요약 시도" value={usage.calls.total} />
+        <Stat label="요약 성공" value={usage.calls.succeeded} />
+        <Stat label="요약 실패" value={usage.calls.failed} tone={usage.calls.failed > 0 ? 'warn' : undefined} />
+        <Stat label="사용 토큰" value={totalTokens} />
       </div>
+
+      <p className="usage-note">
+        대화 기록 자체는 {usage.provider ?? '모델'} 을 쓰지 않습니다. 위 숫자는 대화를
+        요약해 관측치를 만드는 작업에만 해당합니다.
+      </p>
 
       {usage.failureReasons.length > 0 && (
         <ul className="usage-reasons">
           {usage.failureReasons.map(reason => (
             <li key={reason.classification}>
-              <span className="usage-reason-name">{reason.classification}</span>
-              <span className="usage-reason-count">{reason.count}</span>
+              <span className="usage-reason-name">
+                {FAILURE_LABELS[reason.classification] ?? reason.classification}
+              </span>
+              <span className="usage-reason-count">{reason.count}건</span>
             </li>
           ))}
         </ul>

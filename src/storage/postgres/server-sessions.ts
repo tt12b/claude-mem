@@ -227,22 +227,35 @@ export class PostgresServerSessionsRepository {
     return updated ? mapServerSessionRow(updated) : null;
   }
 
+  /**
+   * Advance the generation watermark.
+   *
+   * `watermark` must be the `occurred_at` of the last event that actually
+   * reached the provider — NOT the wall clock. A batch is capped, so events
+   * can arrive while one is being summarised; moving to now() would step over
+   * them and they would never be summarised at all. GREATEST keeps the
+   * watermark monotonic if two jobs finish out of order.
+   */
   async markGenerationCompleted(input: {
     id: string;
     projectId: string;
     teamId: string;
+    watermark?: Date | null;
   }): Promise<PostgresServerSession | null> {
     const updated = await queryOne<ServerSessionRow>(
       this.client,
       `
         UPDATE server_sessions
         SET generation_status = 'completed',
-            last_generated_at = now(),
+            last_generated_at = GREATEST(
+              COALESCE(last_generated_at, to_timestamp(0)),
+              COALESCE($4::timestamptz, now())
+            ),
             updated_at = now()
         WHERE id = $1 AND project_id = $2 AND team_id = $3
         RETURNING *
       `,
-      [input.id, input.projectId, input.teamId]
+      [input.id, input.projectId, input.teamId, input.watermark ?? null]
     );
     return updated ? mapServerSessionRow(updated) : null;
   }

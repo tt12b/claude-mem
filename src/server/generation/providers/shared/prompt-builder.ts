@@ -33,12 +33,33 @@ const FALLBACK_OBSERVATION_TYPES: ReadonlyArray<Pick<ObservationType, 'id'>> = [
 // derived from privately-tagged inputs.
 
 export interface BuildServerPromptResult {
+  /**
+   * How many of `context.events` made it into the prompt. Fewer than the
+   * input means the budget cut the batch short and the caller must not
+   * advance its watermark past this point.
+   */
+  readonly includedEvents?: number;
   readonly prompt: string;
   readonly hadPrivateContent: boolean;
   readonly skippedAll: boolean;
 }
 
 const MAX_PAYLOAD_CHARS = 16 * 1024;
+
+/**
+ * Ceiling on the combined event text in one request.
+ *
+ * MAX_PAYLOAD_CHARS bounds a single event; without a total the periodic
+ * summariser can hand the provider a whole backlog at once (500 events x 16KB
+ * is 8MB, past any context window). Events are appended oldest-first and the
+ * builder stops at this budget — the caller advances the session watermark to
+ * the last event it actually included, so the remainder is picked up by the
+ * next tick instead of being dropped.
+ */
+const MAX_TOTAL_PAYLOAD_CHARS = (() => {
+  const raw = Number.parseInt(process.env.CLAUDE_MEM_MAX_PROMPT_CHARS ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 120 * 1024;
+})();
 
 /**
  * Language for the human-readable fields of an observation.
@@ -72,15 +93,26 @@ export function buildServerGenerationPrompt(
   let allEventsScrubbedToEmpty = true;
   const eventBlocks: string[] = [];
 
+  let usedChars = 0;
+  let includedEvents = 0;
   for (const event of context.events) {
     const block = buildEventBlock(event);
     if (block.hadPrivate) {
       hadPrivateContent = true;
     }
-    if (block.body.length > 0) {
-      allEventsScrubbedToEmpty = false;
-      eventBlocks.push(block.body);
+    if (block.body.length === 0) {
+      includedEvents++;
+      continue;
     }
+    // Always take the first event: a single oversized one must still be sent
+    // (truncated to MAX_PAYLOAD_CHARS) rather than stalling the session.
+    if (eventBlocks.length > 0 && usedChars + block.body.length > MAX_TOTAL_PAYLOAD_CHARS) {
+      break;
+    }
+    allEventsScrubbedToEmpty = false;
+    eventBlocks.push(block.body);
+    usedChars += block.body.length;
+    includedEvents++;
   }
 
   const skippedAll = context.events.length > 0 && allEventsScrubbedToEmpty;
@@ -116,7 +148,7 @@ export function buildServerGenerationPrompt(
     ...languageDirective(),
   ].join('\n');
 
-  return { prompt, hadPrivateContent, skippedAll };
+  return { prompt, hadPrivateContent, skippedAll, includedEvents };
 }
 
 interface EventBlockResult {

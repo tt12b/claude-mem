@@ -61,6 +61,12 @@ export interface ProcessGeneratedResponseInput {
   sourceAdapter?: string | null;
   // Provider tokens this job spent (from the generate() result), for cost metering.
   tokensUsed?: number;
+  /**
+   * `occurred_at` of the newest event that went into this request. A summary
+   * batch is capped, so the session watermark must advance to this point and
+   * not to the wall clock — anything that arrived later still needs its turn.
+   */
+  eventsWatermark?: Date | null;
 }
 
 export async function processGeneratedResponse(
@@ -375,6 +381,7 @@ async function persistGeneratedObservations(
         id: fresh.serverSessionId,
         projectId: fresh.projectId,
         teamId: fresh.teamId,
+        watermark: input.eventsWatermark ?? null,
       });
     }
     await eventsLogRepo.append({

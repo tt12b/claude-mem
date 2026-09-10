@@ -87,9 +87,19 @@ export const sessionInitHandler: EventHandler = {
     if (runtime.runtime === 'server') {
       try {
         await startServerSession(runtime, input, sessionId, platformSource, project, prompt);
-        // Server does not currently support the same context-injection
-        // protocol as the worker. Skip semantic injection in server mode
-        // until the server context endpoint exists.
+        const serverContext = semanticInject
+          ? await fetchServerContext(runtime, prompt, platformSource, settings)
+          : '';
+        if (serverContext) {
+          return {
+            continue: true,
+            suppressOutput: true,
+            hookSpecificOutput: {
+              hookEventName: 'UserPromptSubmit',
+              additionalContext: serverContext,
+            },
+          };
+        }
         return { continue: true, suppressOutput: true };
       } catch (error: unknown) {
         if (isServerClientError(error) && error.isFallbackEligible()) {
@@ -183,6 +193,53 @@ export const sessionInitHandler: EventHandler = {
     return { continue: true, suppressOutput: true };
   }
 };
+
+/**
+ * Past observations relevant to this prompt, for injection ahead of it.
+ *
+ * The server runtime never wired this up — session-init returned right after
+ * starting the session, so a self-hosted deployment stored memories but never
+ * fed them back, which is the whole point of the tool. `/v1/context` already
+ * runs the same full-text surface as search and returns a pre-joined string,
+ * so the hook only has to ask.
+ *
+ * Best-effort: a failure here must not block the prompt. The session is
+ * already started at this point; losing injection is a degraded turn, not a
+ * broken one.
+ */
+async function fetchServerContext(
+  runtime: ServerRuntimeContext,
+  prompt: string,
+  platformSource: string,
+  settings: { CLAUDE_MEM_SEMANTIC_INJECT_LIMIT?: string | number },
+): Promise<string> {
+  // Very short prompts ("ok", "continue") carry no retrieval signal and would
+  // pull back noise; the worker path applies the same floor.
+  if (!prompt || prompt.length < 20 || prompt === '[media prompt]') return '';
+
+  const limit = parseSemanticInjectLimit(settings.CLAUDE_MEM_SEMANTIC_INJECT_LIMIT ?? 5);
+  try {
+    const result = await runtime.client.contextObservations({
+      projectId: runtime.projectId,
+      query: prompt,
+      limit,
+      platformSource,
+    });
+    const context = (result?.context ?? '').trim();
+    if (!context) return '';
+    logger.debug('HOOK', 'session-init: injected server context', {
+      observationCount: result.observations?.length ?? 0,
+      chars: context.length,
+    });
+    return context;
+  } catch (error: unknown) {
+    logger.debug('HOOK', 'session-init: server context lookup failed; continuing without injection', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return '';
+  }
+}
+
 
 async function startServerSession(
   runtime: ServerRuntimeContext,

@@ -111,6 +111,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     app.get('/api/projects', this.wrap(this.handleProjects));
     app.get('/api/settings', this.wrap(this.handleSettings));
     app.get('/api/usage', this.wrap(this.handleUsage));
+    app.get('/api/context/preview', this.wrap(this.handleContextPreview));
     app.get('/api/logs', (_req: Request, res: Response) => {
       // The worker streams its own log file here. The server runtime logs to
       // the container's stdout/log file instead, so report empty rather than
@@ -258,6 +259,43 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         count: Number(r.count),
       })),
     });
+  }
+
+  /**
+   * What a new session in this project would be handed.
+   *
+   * Mirrors how /v1/context assembles an injection payload — observation
+   * `content`, newest first, joined by a blank line — but reads by project
+   * label and returns plain text, which is what the viewer's preview drawer
+   * expects (it calls response.text(), not .json()).
+   */
+  private async handleContextPreview(req: Request, res: Response): Promise<void> {
+    const project = typeof req.query.project === 'string' && req.query.project.trim() !== ''
+      ? req.query.project.trim()
+      : null;
+    const limit = Number.parseInt(String(req.query.limit ?? '20'), 10);
+    const rows = await this.queryObservations({
+      offset: 0,
+      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, MAX_LIMIT) : 20,
+      project,
+      summaries: false,
+    });
+
+    res.type('text/plain; charset=utf-8');
+    if (rows.length === 0) {
+      res.send(
+        project
+          ? `아직 ${project} 프로젝트에 주입할 관측치가 없습니다.`
+          : '아직 주입할 관측치가 없습니다.',
+      );
+      return;
+    }
+
+    const body = rows
+      .map(row => String(row.text ?? ''))
+      .filter(text => text.trim().length > 0)
+      .join('\n\n');
+    res.send(body);
   }
 
   private page<T>(rows: T[], limit: number): { items: T[]; hasMore: boolean } {
