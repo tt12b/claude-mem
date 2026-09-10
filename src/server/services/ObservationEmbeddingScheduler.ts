@@ -30,9 +30,10 @@ const MIN_INTERVAL_MINUTES = 1;
 const MAX_ROWS_PER_TICK = MAX_EMBEDDING_BATCH;
 
 /**
- * Characters of an observation actually sent. `text-embedding-004` caps its
- * input at roughly 2k tokens and a summary can run longer; the opening of an
- * observation carries its subject, so a head truncation loses least.
+ * Characters of an observation actually sent. The embedding models cap
+ * their input at a couple of thousand tokens and a summary can run longer;
+ * the opening of an observation carries its subject, so a head truncation
+ * loses least.
  */
 const MAX_CHARS_PER_TEXT = 6_000;
 
@@ -75,6 +76,10 @@ export class ObservationEmbeddingScheduler {
 
   start(): void {
     if (!this.enabled || this.timer) return;
+    // Sweep once at startup. Without it every restart pushes the next embed
+    // a full interval out, so a run of deploys can starve the backfill
+    // entirely — which is exactly what happened while this was being wired up.
+    void this.safeTick();
     this.timer = setInterval(() => {
       void this.safeTick();
     }, this.intervalMs);
