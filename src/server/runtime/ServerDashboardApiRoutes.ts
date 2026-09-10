@@ -359,21 +359,23 @@ export class ServerDashboardApiRoutes implements RouteHandler {
           GROUP BY 1`,
         [since],
       ),
-      this.options.pool.query<{ model: string | null }>(
-        `SELECT details->>'model' AS model
+      this.options.pool.query<{ model: string | null; created_at: Date }>(
+        `SELECT details->>'model' AS model, created_at
            FROM observation_generation_job_events
           WHERE event_type = 'completed' AND details->>'model' IS NOT NULL
           ORDER BY created_at DESC
-          LIMIT 1`,
+          LIMIT 200`,
         [],
       ),
-      // The ceiling Google last enforced, parsed out of the quota message.
-      this.options.pool.query<{ reason: string | null }>(
-        `SELECT last_error->>'reason' AS reason
+      // Quota refusals name the model in the message (extractQuotaDetail), so
+      // this is also how we learn WHICH model is spent — failures do not
+      // otherwise record one.
+      this.options.pool.query<{ reason: string | null; updated_at: Date }>(
+        `SELECT last_error->>'reason' AS reason, updated_at
            FROM observation_generation_jobs
-          WHERE status = 'failed' AND last_error->>'reason' LIKE '%limit=%'
+          WHERE status = 'failed' AND last_error->>'reason' LIKE '%model=%'
           ORDER BY updated_at DESC
-          LIMIT 50`,
+          LIMIT 200`,
         [],
       ),
     ]);
@@ -398,11 +400,25 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     // figure orders of magnitude higher.
     const configuredLimits = parseModelLimits(process.env.CLAUDE_MEM_MODEL_LIMITS);
     const measuredLimits = new Map<string, number>();
+    // Most recent quota refusal per model. Rows arrive newest-first.
+    const refusedAt = new Map<string, number>();
     for (const row of limits.rows) {
       const text = row.reason ?? '';
-      const limit = /limit=([0-9]+)/.exec(text)?.[1];
       const model = /model=([A-Za-z0-9._-]+)/.exec(text)?.[1];
-      if (limit && model && !measuredLimits.has(model)) measuredLimits.set(model, Number(limit));
+      if (!model) continue;
+      const limit = /limit=([0-9]+)/.exec(text)?.[1];
+      if (limit && !measuredLimits.has(model)) measuredLimits.set(model, Number(limit));
+      if (!refusedAt.has(model)) refusedAt.set(model, new Date(row.updated_at).getTime());
+    }
+
+    // Most recent success per model. Google does not publish when a daily
+    // allowance resets, so "spent" cannot be timed out on a clock — instead a
+    // later success is the evidence that the model is usable again.
+    const succeededAt = new Map<string, number>();
+    for (const row of active.rows) {
+      const model = row.model;
+      if (!model || succeededAt.has(model)) continue;
+      succeededAt.set(model, new Date(row.created_at).getTime());
     }
 
     const preferred = await new PostgresServerSettingsRepository(this.options.pool)
@@ -434,9 +450,16 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         const used = c.succeeded;
         const measured = measuredLimits.get(name) ?? null;
         const limit = measured ?? configuredLimits.get(name) ?? null;
+        const refused = refusedAt.get(name) ?? null;
+        const succeeded = succeededAt.get(name) ?? null;
+        const exhausted = refused !== null && (succeeded === null || refused > succeeded);
         return {
           name,
           configured: configured.includes(name),
+          // Usable right now, as far as we can tell: no quota refusal since
+          // the last time this model answered.
+          status: exhausted ? 'exhausted' : 'available',
+          exhaustedAtEpoch: exhausted ? refused : null,
           active: name === activeModel,
           preferred: name === preferred,
           priority: configured.indexOf(name),

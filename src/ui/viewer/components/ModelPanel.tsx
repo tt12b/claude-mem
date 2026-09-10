@@ -65,10 +65,9 @@ export function ModelPanel() {
     return null;
   }
 
-  const activeRow = report.models.find(m => m.active) ?? null;
-  const summary = activeRow
-    ? `${activeRow.name}${activeRow.remaining !== null ? ` · 남은 요청 ${activeRow.remaining.toLocaleString()}` : ''}`
-    : (report.provider ?? '미설정');
+  const usable = report.models.filter(m => m.status === 'available' && m.configured);
+  const summary = `사용 가능 ${usable.length}/${report.models.filter(m => m.configured).length}`
+    + (report.preferredModel ? ` · 선택 ${report.preferredModel}` : '');
 
   return (
     <CollapsiblePanel storageKey="cm.panel.models" title="요약 모델" summary={summary}>
@@ -80,7 +79,18 @@ export function ModelPanel() {
 
       <ul className="model-list">
         {report.models.map(model => (
-          <li key={model.name} className={`model-row${model.active ? ' model-row-active' : ''}`}>
+          // Colour carries one meaning each: green says the model can be
+          // used, blue says it is the operator's pick, grey says it is spent.
+          // A picked model that runs out goes grey like any other — the pick
+          // is an intent, not a claim that it works.
+          <li
+            key={model.name}
+            className={[
+              'model-row',
+              `model-row-${model.status}`,
+              model.preferred ? 'model-row-preferred' : '',
+            ].filter(Boolean).join(' ')}
+          >
             <button
               type="button"
               className="model-name model-select"
@@ -88,9 +98,10 @@ export function ModelPanel() {
               disabled={!model.configured || pending !== null}
               title={model.configured ? '이 모델을 먼저 시도' : '설정 목록에 없어 선택할 수 없음'}
             >
-              {model.active && <span className="model-dot" aria-hidden="true">●</span>}
+              <span className="model-dot" aria-hidden="true">●</span>
               {model.name}
               {model.preferred && <span className="model-tag model-tag-pick">선택됨</span>}
+              {model.status === 'exhausted' && <span className="model-tag model-tag-out">한도 소진</span>}
               {!model.configured && <span className="model-tag">목록에서 제거됨</span>}
               {pending === model.name && <span className="model-tag">변경 중…</span>}
             </button>
@@ -117,7 +128,10 @@ export function ModelPanel() {
       </ul>
 
       <p className="model-note">
-        무료 한도는 <strong>하루 요청 횟수</strong> 기준이라 토큰 소비량과는 별개입니다.
+        <strong>초록</strong>은 지금 쓸 수 있는 모델, <strong>회색</strong>은 한도가
+        소진된 모델, <strong>파랑</strong>은 먼저 시도하도록 고른 모델입니다. 한도
+        초기화 시각은 Google 이 알려주지 않으므로, 그 모델로 다시 성공하면 초록으로
+        돌아옵니다. 무료 한도는 <strong>하루 요청 횟수</strong> 기준이라 토큰 소비량과는 별개입니다.
         모델을 누르면 그 모델을 먼저 시도하고, 한도에 걸리면 나머지 모델로 자동
         전환되므로 선택해도 생성이 멈추지 않습니다. “추정”은 공개 문서 기준값이고,
         Google 이 실제로 요청을 거절하면 그때 알려준 값으로 교정됩니다.

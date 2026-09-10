@@ -1253,14 +1253,26 @@
       color: var(--color-text-muted);
     }
 
-    .model-row-active {
-      background: var(--color-bg-elevated, rgba(63, 185, 80, 0.08));
-      color: var(--color-text);
+    /* One meaning per colour: green = usable, grey = out of quota,
+       blue = the operator's pick. A pick that runs out still reads grey,
+       because the pick is an intent and the colour reports reality. */
+    .model-row-available .model-name,
+    .model-row-available .model-dot {
+      color: var(--color-success, #3fb950);
     }
 
-    .model-row-active .model-name {
-      color: var(--color-success, #3fb950);
+    .model-row-available .model-name {
       font-weight: 600;
+    }
+
+    .model-row-exhausted .model-name,
+    .model-row-exhausted .model-dot {
+      color: var(--color-text-muted);
+      font-weight: 400;
+    }
+
+    .model-row-preferred {
+      background: var(--color-bg-elevated, rgba(88, 166, 255, 0.10));
     }
 
     .model-name {
@@ -1292,12 +1304,16 @@
     }
 
     .model-tag-pick {
-      border-color: var(--color-success, #3fb950);
-      color: var(--color-success, #3fb950);
+      border-color: var(--color-accent, #58a6ff);
+      color: var(--color-accent, #58a6ff);
+    }
+
+    .model-tag-out {
+      border-color: var(--color-border);
+      color: var(--color-text-muted);
     }
 
     .model-dot {
-      color: var(--color-success, #3fb950);
       font-size: 9px;
     }
 

@@ -79,6 +79,9 @@ export interface ModelReport {
   models: Array<{
     name: string;
     configured: boolean;
+    /** Usable right now: no quota refusal since this model last answered. */
+    status: 'available' | 'exhausted';
+    exhaustedAtEpoch: number | null;
     active: boolean;
     preferred: boolean;
     priority: number;
