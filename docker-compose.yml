@@ -112,6 +112,10 @@ services:
       CLAUDE_MEM_WORKER_PORT: "37877"
       CLAUDE_MEM_DATA_DIR: /data/claude-mem
       CLAUDE_MEM_QUEUE_ENGINE: bullmq
+      # BullMQ 큐 prefix. 기본값이 CLAUDE_MEM_WORKER_PORT 에서 파생되는데 worker
+      # 서비스에는 그 변수가 없어 두 컨테이너가 서로 다른 큐를 보게 된다. 양쪽에
+      # 같은 값을 명시해 잡이 소비되지 않는 문제를 막는다.
+      CLAUDE_MEM_QUEUE_REDIS_PREFIX: ${CLAUDE_MEM_QUEUE_REDIS_PREFIX:-claude_mem_37877}
       # #2558 — REDIS_URL fallback: default to the in-stack valkey service so the
       # var is not a brittle hard requirement; override CLAUDE_MEM_REDIS_URL to
       # point at an external Redis.
@@ -158,6 +162,8 @@ services:
       CLAUDE_MEM_RUNTIME: server-beta
       CLAUDE_MEM_DATA_DIR: /data/claude-mem
       CLAUDE_MEM_QUEUE_ENGINE: bullmq
+      # 서버 서비스와 반드시 동일해야 한다 (위 주석 참고).
+      CLAUDE_MEM_QUEUE_REDIS_PREFIX: ${CLAUDE_MEM_QUEUE_REDIS_PREFIX:-claude_mem_37877}
       # #2558 — REDIS_URL fallback (see server service above).
       CLAUDE_MEM_REDIS_URL: ${CLAUDE_MEM_REDIS_URL:-redis://valkey:6379}
       CLAUDE_MEM_REDIS_MODE: docker
