@@ -135,7 +135,7 @@ services:
       # 임베딩은 관찰이 저장된 뒤 이 간격마다 뒤에서 채운다. 0 이면 비활성.
       CLAUDE_MEM_EMBEDDINGS: ${CLAUDE_MEM_EMBEDDINGS:-true}
       CLAUDE_MEM_EMBEDDING_INTERVAL_MINUTES: ${CLAUDE_MEM_EMBEDDING_INTERVAL_MINUTES:-5}
-      CLAUDE_MEM_EMBEDDING_MODEL: ${CLAUDE_MEM_EMBEDDING_MODEL:-text-embedding-004}
+      CLAUDE_MEM_EMBEDDING_MODEL: ${CLAUDE_MEM_EMBEDDING_MODEL:-gemini-embedding-001}
       # 임베딩은 서버 프로세스가 직접 호출하므로 서버에도 키가 필요하다.
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # 표시 전용. 생성은 워커가 하지만 대시보드가 어떤 provider/model 인지

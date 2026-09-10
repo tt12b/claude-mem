@@ -14,11 +14,16 @@ import type { EmbeddingProvider } from './EmbeddingProvider.js';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 /**
- * `text-embedding-004` is natively 768-dimensional and generally available,
- * so it needs no dimensionality negotiation. `gemini-embedding-001` also
- * works — it honours the `outputDimensionality` we send.
+ * `gemini-embedding-001` is what a current AI Studio key is actually served:
+ * `text-embedding-004` 404s for new keys the same way the retired 2.x
+ * generation models do. It defaults to 3072 dimensions and honours the
+ * `outputDimensionality` we send, so it is asked for 768.
+ *
+ * Note that `batchEmbedContents` is absent from this model's advertised
+ * `supportedGenerationMethods` yet answers 200 — the listing understates it,
+ * so batching stays.
  */
-const DEFAULT_MODEL = 'text-embedding-004';
+const DEFAULT_MODEL = 'gemini-embedding-001';
 
 export interface GeminiEmbeddingProviderOptions {
   apiKey: string;
