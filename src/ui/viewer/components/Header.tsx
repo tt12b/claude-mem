@@ -2,6 +2,7 @@ import React from 'react';
 import { ThemeToggle } from './ThemeToggle';
 import { ThemePreference } from '../hooks/useTheme';
 import { useSpinningFavicon } from '../hooks/useSpinningFavicon';
+import { Glossary } from './Glossary';
 
 interface HeaderProps {
   projects: string[];
@@ -42,6 +43,7 @@ export function Header({
           </div>
           <span className="logo-text">여웅이 Mem</span>
         </h1>
+        <Glossary />
       </div>
       <div className="status">
         <select
