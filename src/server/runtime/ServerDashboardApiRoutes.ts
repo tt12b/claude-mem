@@ -398,9 +398,11 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       .map(entry => entry.trim())
       .filter(entry => entry.length > 0);
 
-    // Consumption is metered per quota day, not per display window: the
-    // dashboard can show a week of history while "remaining" must still be
-    // measured from the last midnight-Pacific reset.
+    // Every figure on this panel is measured from the same instant: the
+    // provider's own reset. Mixing windows put "요청 6" next to "남은 요청
+    // 14/20" while the database held 13 calls for that model — the counts
+    // were a rolling 24h and the remaining figure was the quota day, so they
+    // could never agree.
     const dayStart = quotaDayStart();
     const embeddings = await this.embeddingStatus();
     const [calls, tokens, askCalls, active, limits] = await Promise.all([
@@ -416,7 +418,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
            FROM usage_events
           WHERE kind = 'tokens' AND created_at >= $1
           GROUP BY 1`,
-        [since],
+        [dayStart],
       ),
       // Dashboard questions call the same models on the same key, so they
       // draw down the same daily allowance. They leave no generation-job

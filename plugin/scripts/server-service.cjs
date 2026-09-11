@@ -9665,7 +9665,7 @@ return ''
           GROUP BY 1, 2`,[a]),this.options.pool.query(`SELECT metadata->>'model' AS model, COALESCE(sum(quantity), 0)::text AS total
            FROM usage_events
           WHERE kind = 'tokens' AND created_at >= $1
-          GROUP BY 1`,[i]),this.options.pool.query(`SELECT metadata->>'model' AS model, count(*)::text AS count
+          GROUP BY 1`,[a]),this.options.pool.query(`SELECT metadata->>'model' AS model, count(*)::text AS count
            FROM usage_events
           WHERE kind = 'request' AND metadata->>'source' = 'ask' AND created_at >= $1
           GROUP BY 1`,[a]),this.options.pool.query(`SELECT details->>'model' AS model, created_at
