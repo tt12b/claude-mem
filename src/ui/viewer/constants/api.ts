@@ -10,5 +10,6 @@ export const API_ENDPOINTS = {
   ASK: '/api/ask',
   ASK_STATUS: '/api/ask/status',
   EMBEDDINGS_RUN: '/api/embeddings/run',
+  ASK_NOTES: '/api/ask/notes',
   STREAM: '/stream',
 } as const;

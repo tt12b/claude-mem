@@ -32,6 +32,7 @@ import { logger } from '../../utils/logger.js';
 import { QUOTA_TIMEZONE, nextQuotaReset, quotaDayStart } from '../services/quota-day.js';
 import { PostgresObservationRepository } from '../../storage/postgres/observations.js';
 import { AskService, MAX_QUESTION_CHARS, askApiKey, askBriefingLoaded, askModels } from '../ask/AskService.js';
+import { PostgresAskNotesRepository } from '../../storage/postgres/ask-notes.js';
 import { vectorSupport } from '../../storage/postgres/vector-support.js';
 import { resolveEmbeddingProvider } from '../generation/embeddings/GeminiEmbeddingProvider.js';
 import { resolveEmbeddingIntervalMs } from '../services/ObservationEmbeddingScheduler.js';
@@ -163,6 +164,8 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     app.post('/api/ask', express.json({ limit: '32kb' }), this.wrap(this.handleAsk));
     app.get('/api/ask/status', this.wrap(this.handleAskStatus));
     app.post('/api/embeddings/run', this.wrap(this.handleRunEmbeddings));
+    app.get('/api/ask/notes', this.wrap(this.handleListNotes));
+    app.delete('/api/ask/notes/:id', this.wrap(this.handleDeleteNote));
     app.get('/api/context/preview', this.wrap(this.handleContextPreview));
     app.get('/api/logs', this.wrap(this.handleLogs));
     app.get('/stream', this.handleStream.bind(this));
@@ -607,6 +610,29 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       briefingLoaded: askBriefingLoaded(),
       models,
     });
+  }
+
+  /** What the assistant has been told to remember, so it can be reviewed. */
+  private async handleListNotes(_req: Request, res: Response): Promise<void> {
+    const notes = await new PostgresAskNotesRepository(this.options.pool).list();
+    res.json({ notes });
+  }
+
+  /**
+   * Forget one note.
+   *
+   * The counterpart to remembering: a note the model wrote down wrongly
+   * would otherwise ride along in every future prompt with no way out.
+   */
+  private async handleDeleteNote(req: Request, res: Response): Promise<void> {
+    const raw = req.params.id;
+    const id = Array.isArray(raw) ? raw[0] ?? '' : raw ?? '';
+    const removed = await new PostgresAskNotesRepository(this.options.pool).remove(id);
+    if (!removed) {
+      res.status(404).json({ error: 'NotFound', message: '없는 메모입니다' });
+      return;
+    }
+    res.json({ deleted: id });
   }
 
   /**

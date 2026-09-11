@@ -38,6 +38,13 @@ interface AskResponse {
   model: string;
   sources: AskSource[];
   empty: boolean;
+  remembered: string[];
+}
+
+interface AskNote {
+  id: string;
+  content: string;
+  createdAtEpoch: number;
 }
 
 interface AskStatus {
@@ -124,6 +131,8 @@ export function AskChat({ project, open, onToggle }: AskChatProps) {
   const [turns, setTurns] = useState<Turn[]>(readTurns);
   const [question, setQuestion] = useState('');
   const [pending, setPending] = useState(false);
+  const [notes, setNotes] = useState<AskNote[]>([]);
+  const [notesOpen, setNotesOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -137,6 +146,28 @@ export function AskChat({ project, open, onToggle }: AskChatProps) {
       }
     })();
   }, []);
+
+  const loadNotes = useCallback(async () => {
+    try {
+      const response = await fetch(API_ENDPOINTS.ASK_NOTES);
+      if (response.ok) setNotes(((await response.json()) as { notes: AskNote[] }).notes ?? []);
+    } catch {
+      // The list is a convenience; the notes still reach the model.
+    }
+  }, []);
+
+  useEffect(() => { void loadNotes(); }, [loadNotes]);
+
+  // A note the model wrote down wrongly would otherwise ride along in every
+  // later prompt with no way to take it back.
+  const forget = useCallback(async (id: string) => {
+    try {
+      await fetch(`${API_ENDPOINTS.ASK_NOTES}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await loadNotes();
+    } catch {
+      // Leave the list as it is; the next load will correct it.
+    }
+  }, [loadNotes]);
 
   // Keep the newest exchange in view as answers land.
   useEffect(() => {
@@ -179,6 +210,7 @@ export function AskChat({ project, open, onToggle }: AskChatProps) {
         model: result.model,
         sources: result.sources,
       }]);
+      if (result.remembered?.length) void loadNotes();
     } catch (err) {
       setTurns(prev => [...prev, {
         question: trimmed,
@@ -190,7 +222,7 @@ export function AskChat({ project, open, onToggle }: AskChatProps) {
     } finally {
       setPending(false);
     }
-  }, [question, pending, project, turns]);
+  }, [question, pending, project, turns, loadNotes]);
 
   const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -215,6 +247,16 @@ export function AskChat({ project, open, onToggle }: AskChatProps) {
           {project && <span className="ask-chat-scope">{project}</span>}
         </span>
         <div className="ask-chat-actions">
+          {notes.length > 0 && (
+            <button
+              type="button"
+              className={`ask-chat-icon${notesOpen ? ' ask-chat-icon-on' : ''}`}
+              onClick={() => setNotesOpen(v => !v)}
+              title="기억해둔 것"
+            >
+              기억 {notes.length}
+            </button>
+          )}
           {turns.length > 0 && (
             <button type="button" className="ask-chat-icon" onClick={() => setTurns([])} title="대화 비우기">
               지우기
@@ -223,6 +265,24 @@ export function AskChat({ project, open, onToggle }: AskChatProps) {
           <button type="button" className="ask-chat-icon" onClick={onToggle} title="닫기">✕</button>
         </div>
       </header>
+
+      {notesOpen && notes.length > 0 && (
+        <ul className="ask-notes">
+          {notes.map(note => (
+            <li key={note.id}>
+              <span className="ask-note-text">{note.content}</span>
+              <button
+                type="button"
+                className="ask-note-forget"
+                onClick={() => void forget(note.id)}
+                title="이 기억 지우기"
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <div className="ask-chat-body" ref={scrollRef}>
         {status && !status.available && (

@@ -341,6 +341,19 @@ CREATE INDEX IF NOT EXISTS idx_rate_limit_counters_window ON rate_limit_counters
 -- separate containers, so a value the dashboard changes cannot travel through
 -- the environment — it has to live somewhere both processes read. Small and
 -- deliberately untyped: one row per knob.
+-- Things the assistant was told to remember from the dashboard chat.
+-- Kept out of server_settings (a key/value store) because these are a list
+-- the operator adds to, reviews and deletes from, and out of the briefing
+-- file because that file carries the answering rules and ships in the image:
+-- a note written at runtime would be lost on the next deploy, and letting a
+-- model edit its own rules is a different and much larger risk.
+CREATE TABLE IF NOT EXISTS ask_notes (
+  id TEXT PRIMARY KEY,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ask_notes_created ON ask_notes(created_at);
+
 CREATE TABLE IF NOT EXISTS server_settings (
   key TEXT PRIMARY KEY,
   value JSONB NOT NULL,

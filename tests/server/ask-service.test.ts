@@ -2,17 +2,30 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { AskService } from '../../src/server/ask/AskService.js';
 import { resetVectorSupportCache } from '../../src/storage/postgres/vector-support.js';
 
-function pool(rows: Array<Record<string, unknown>>) {
+function pool(rows: Array<Record<string, unknown>>, notes: Array<Record<string, unknown>> = []) {
   const calls: Array<{ text: string; values?: unknown[] }> = [];
   return {
     calls,
+    // Route by statement: the service reads notes, retrieves observations
+    // and writes usage rows, and handing the same rows to all three made
+    // notes come back shaped like observations.
     pool: {
       async query(text: string, values?: unknown[]) {
         calls.push({ text, values });
-        return { command: 'SELECT', rowCount: rows.length, oid: 0, fields: [], rows };
+        const out = text.includes('FROM ask_notes') ? notes
+          : text.includes('FROM observations') ? rows
+          : [];
+        return { command: 'SELECT', rowCount: out.length, oid: 0, fields: [], rows: out };
       },
     } as never,
   };
+}
+
+/** The retrieval statement, wherever it landed in the call order. */
+function retrievalCall(calls: Array<{ text: string; values?: unknown[] }>) {
+  const call = calls.find(c => c.text.includes('FROM observations o'));
+  if (!call) throw new Error('no retrieval query was issued');
+  return call;
 }
 
 function row(overrides: Record<string, unknown> = {}) {
@@ -196,8 +209,9 @@ describe('AskService', () => {
     await new AskService({ pool: p, fetchImpl: geminiOk('ok') as never })
       .ask({ question: '질문', project: 'claude-mem' });
 
-    expect(calls[0].text).toContain("= $4");
-    expect(calls[0].values).toContain('claude-mem');
+    const call = retrievalCall(calls);
+    expect(call.text).toContain("= $4");
+    expect(call.values).toContain('claude-mem');
   });
 
   it('leaves the vector cast out where pgvector is absent', async () => {
@@ -210,7 +224,7 @@ describe('AskService', () => {
 
     // A `::vector` cast on stock Postgres is a syntax error, not an empty
     // result — it would take the whole ask down.
-    expect(calls[0].text).not.toContain('::vector');
+    expect(retrievalCall(calls).text).not.toContain('::vector');
   });
 });
 
@@ -265,8 +279,9 @@ describe('AskService follow-ups', () => {
 
     // "그럼 왜 그랬어?" alone retrieves nothing useful; the earlier question
     // is what carries the topic.
-    expect(String(calls[0].values?.[1])).toContain('큐 접두사 문제');
-    expect(String(calls[0].values?.[1])).toContain('그럼 왜 그랬어?');
+    const call = retrievalCall(calls);
+    expect(String(call.values?.[1])).toContain('큐 접두사 문제');
+    expect(String(call.values?.[1])).toContain('그럼 왜 그랬어?');
   });
 
   it('shows the model the prior exchange', async () => {
@@ -315,5 +330,111 @@ describe('AskService follow-ups', () => {
 
     expect(prompt).not.toContain('아주오래된질문');
     expect(prompt).toContain('세번째질문');
+  });
+});
+
+describe('AskService remembering', () => {
+  function rememberPool(notes: Array<Record<string, unknown>> = []) {
+    const calls: Array<{ text: string; values?: unknown[] }> = [];
+    return {
+      calls,
+      pool: {
+        async query(text: string, values?: unknown[]) {
+          calls.push({ text, values });
+          if (text.includes('FROM ask_notes')) {
+            return { command: 'SELECT', rowCount: notes.length, oid: 0, fields: [], rows: notes };
+          }
+          if (text.includes('FROM observations o')) {
+            return { command: 'SELECT', rowCount: 1, oid: 0, fields: [], rows: [row()] };
+          }
+          if (text.includes('INSERT INTO ask_notes')) {
+            return { command: 'INSERT', rowCount: 1, oid: 0, fields: [],
+                     rows: [{ id: 'n1', content: values?.[1], created_at: new Date() }] };
+          }
+          return { command: 'SELECT', rowCount: 0, oid: 0, fields: [], rows: [] };
+        },
+      } as never,
+    };
+  }
+
+  it('saves a <remember> block and strips it from the answer', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    const { calls, pool: p } = rememberPool();
+
+    const result = await new AskService({
+      pool: p,
+      fetchImpl: geminiOk('알겠습니다.<remember>사용자를 친오빠님이라 부른다</remember>') as never,
+    }).ask({ question: '친오빠라고 불러줘' });
+
+    // A tag left in the answer would be shown as markup and, worse, fed
+    // back as history and remembered again on the next turn.
+    expect(result.answer).toBe('알겠습니다.');
+    expect(result.remembered).toEqual(['사용자를 친오빠님이라 부른다']);
+    expect(calls.some(c => c.text.includes('INSERT INTO ask_notes'))).toBe(true);
+  });
+
+  it('does not store a note that is already recorded', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    // The lookup finds it, so the insert never runs.
+    const calls: Array<{ text: string }> = [];
+    const p = {
+      async query(text: string, values?: unknown[]) {
+        calls.push({ text });
+        if (text.includes('SELECT id FROM ask_notes WHERE content')) {
+          return { command: 'SELECT', rowCount: 1, oid: 0, fields: [], rows: [{ id: 'existing' }] };
+        }
+        if (text.includes('FROM observations o')) {
+          return { command: 'SELECT', rowCount: 1, oid: 0, fields: [], rows: [row()] };
+        }
+        return { command: 'SELECT', rowCount: 0, oid: 0, fields: [], rows: [] };
+      },
+    } as never;
+
+    const result = await new AskService({
+      pool: p,
+      fetchImpl: geminiOk('네<remember>같은 내용</remember>') as never,
+    }).ask({ question: '또 기억해' });
+
+    expect(result.remembered).toEqual([]);
+    expect(calls.some(c => c.text.includes('INSERT INTO ask_notes'))).toBe(false);
+  });
+
+  it('feeds stored notes back into the prompt', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    let prompt = '';
+    const { pool: p } = rememberPool([
+      { id: 'n1', content: '사용자를 친오빠님이라 부른다', created_at: new Date() },
+    ]);
+
+    await new AskService({
+      pool: p,
+      fetchImpl: (async (_u: string, init: RequestInit) => {
+        prompt = JSON.parse(String(init.body)).contents[0].parts[0].text;
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }));
+      }) as never,
+    }).ask({ question: '안녕' });
+
+    expect(prompt).toContain('## 기억해둔 것');
+    expect(prompt).toContain('친오빠님');
+  });
+
+  it('answers normally when there is nothing to remember', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    const { calls, pool: p } = rememberPool();
+
+    const result = await new AskService({ pool: p, fetchImpl: geminiOk('그냥 답변') as never })
+      .ask({ question: '질문' });
+
+    expect(result.answer).toBe('그냥 답변');
+    expect(result.remembered).toEqual([]);
+    expect(calls.some(c => c.text.includes('INSERT INTO ask_notes'))).toBe(false);
   });
 });

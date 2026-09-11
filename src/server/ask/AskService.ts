@@ -27,6 +27,7 @@ import { embedSearchQuery } from '../generation/embeddings/query-embedding.js';
 import { buildSearchTerms } from '../../storage/postgres/search-terms.js';
 import { EMBEDDING_COLUMN, toVectorLiteral, vectorSupport } from '../../storage/postgres/vector-support.js';
 import { PostgresUsageRepository } from '../../storage/postgres/usage.js';
+import { PostgresAskNotesRepository, type AskNote } from '../../storage/postgres/ask-notes.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -67,7 +68,19 @@ export interface AskResult {
   sources: AskSource[];
   /** True when retrieval found nothing — the answer will say so. */
   empty: boolean;
+  /** Notes the assistant was asked to remember during this turn. */
+  remembered: string[];
 }
+
+/**
+ * How the model asks for something to be remembered.
+ *
+ * A tag rather than a function call: function calling needs a second
+ * round-trip to return the result, and the free tier meters requests, so
+ * remembering something would cost twice what answering does. The tag is
+ * stripped before the answer reaches the reader.
+ */
+const REMEMBER_TAG = /<remember>([\s\S]*?)<\/remember>/gi;
 
 interface SourceRow {
   id: string;
@@ -150,6 +163,16 @@ export class AskService {
     if (question === '') throw new Error('question is empty');
 
     const history = (input.history ?? []).slice(-MAX_HISTORY_TURNS);
+    const notesRepo = new PostgresAskNotesRepository(this.options.pool);
+    let notes: AskNote[] = [];
+    try {
+      notes = await notesRepo.list();
+    } catch (error) {
+      // Notes are an enhancement; losing them must not lose the answer.
+      logger.warn('SYSTEM', 'could not read ask notes', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const limit = Math.min(Math.max(1, input.limit ?? DEFAULT_SOURCES), MAX_SOURCES);
     // A follow-up is often too terse to retrieve on ("그럼 왜 그랬어?"), so
     // the thread's earlier questions carry the topic into the search.
@@ -169,13 +192,15 @@ export class AskService {
     // The model is asked either way and told there were no records, so it can
     // greet, explain itself, or say the lookup came up empty — whichever the
     // message actually calls for. One request is worth not feeling dead.
-    const prompt = this.buildPrompt(question, rows, history);
-    const { answer, model, tokensUsed } = await this.generate(prompt);
+    const prompt = this.buildPrompt(question, rows, history, notes);
+    const raw = await this.generate(prompt);
+    const { text: answer, remembered } = await this.captureNotes(raw.answer, notesRepo);
+    const { model, tokensUsed } = raw;
     // Attribute the spend to the team whose records were read. Without this
     // the dashboard's "남은 요청" keeps counting down only summarisation
     // while asking quietly draws from the same daily allowance.
     await this.meter({ row: rows[0], model, tokensUsed });
-    return { answer, model, sources, empty: rows.length === 0 };
+    return { answer, model, sources, empty: rows.length === 0, remembered };
   }
 
   /**
@@ -237,7 +262,12 @@ export class AskService {
     return result.rows;
   }
 
-  private buildPrompt(question: string, rows: SourceRow[], history: AskTurn[] = []): string {
+  private buildPrompt(
+    question: string,
+    rows: SourceRow[],
+    history: AskTurn[] = [],
+    notes: AskNote[] = [],
+  ): string {
     // Oldest first: the records often revisit the same problem, and a reader
     // asked to describe "how we fixed X" needs them in the order they happened.
     const ordered = [...rows].sort(
@@ -258,8 +288,13 @@ export class AskService {
           .join('\n\n')]
       : [];
 
+    const noteBlock = notes.length > 0
+      ? ['---', '## 기억해둔 것', notes.map(note => `- ${note.content}`).join('\n')]
+      : [];
+
     return [
       briefing,
+      ...noteBlock,
       '---',
       '## 참고할 기록',
       records,
@@ -316,6 +351,36 @@ export class AskService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * Pull any `<remember>` blocks out of the answer and persist them.
+   *
+   * Stripping is not optional: leaving the tag in means the reader sees
+   * markup, and a tag that survives into the chat history would be fed back
+   * as context and re-remembered on the next turn.
+   */
+  private async captureNotes(
+    answer: string,
+    repo: PostgresAskNotesRepository,
+  ): Promise<{ text: string; remembered: string[] }> {
+    const matches = [...answer.matchAll(REMEMBER_TAG)];
+    if (matches.length === 0) return { text: answer, remembered: [] };
+
+    const remembered: string[] = [];
+    for (const match of matches) {
+      const content = (match[1] ?? '').trim();
+      if (content === '') continue;
+      try {
+        const saved = await repo.add(content);
+        if (saved) remembered.push(saved.content);
+      } catch (error) {
+        logger.warn('SYSTEM', 'could not save an ask note', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return { text: answer.replace(REMEMBER_TAG, '').trim(), remembered };
   }
 
   private async anyTeamId(): Promise<string | null> {

@@ -1452,6 +1452,50 @@
       border-color: var(--color-border-hover);
     }
 
+    .ask-chat-icon-on {
+      color: var(--color-text-primary);
+      border-color: var(--color-border-hover);
+    }
+
+    /* Standing instructions the assistant was told to keep. Listed with a
+       way out: a note written down wrongly would otherwise be attached to
+       every later question forever. */
+    .ask-notes {
+      margin: 0;
+      padding: 8px 14px;
+      list-style: none;
+      border-bottom: 1px solid var(--color-border-primary);
+      background: var(--color-bg-secondary);
+    }
+
+    .ask-notes li {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 3px 0;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .ask-note-text {
+      flex: 1;
+      color: var(--color-text-secondary);
+    }
+
+    .ask-note-forget {
+      padding: 0 4px;
+      font: inherit;
+      font-size: 12px;
+      color: var(--color-text-muted);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+    }
+
+    .ask-note-forget:hover {
+      color: var(--color-accent-error);
+    }
+
     .ask-chat-body {
       flex: 1;
       overflow-y: auto;
