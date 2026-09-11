@@ -247,9 +247,9 @@ function EmbeddingRow({
             className="embedding-run"
             onClick={() => void runNow()}
             disabled={running}
-            title="다음 주기를 기다리지 않고 지금 임베딩"
+            title="다음 주기를 기다리지 않고 지금 다시 시도"
           >
-            {running ? '처리 중…' : '지금 처리'}
+            {running ? '재시도 중…' : '재시도'}
           </button>
         )}
         {error && <span className="embedding-warn">실패: {error}</span>}
