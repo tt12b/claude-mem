@@ -21,6 +21,8 @@ function row(overrides: Record<string, unknown> = {}) {
     content: '큐 접두사가 서버와 워커에서 달라 잡이 소비되지 않았다',
     created_at: new Date('2026-09-09T01:00:00.000Z'),
     project_label: 'claude-mem',
+    team_id: 'team-1',
+    project_id: 'project-1',
     ...overrides,
   };
 }
@@ -205,5 +207,109 @@ describe('AskService', () => {
     // A `::vector` cast on stock Postgres is a syntax error, not an empty
     // result — it would take the whole ask down.
     expect(calls[0].text).not.toContain('::vector');
+  });
+});
+
+describe('AskService metering', () => {
+  it('records the call so the model panel counts it against the same allowance', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    const { calls, pool: p } = pool([row()]);
+
+    await new AskService({
+      pool: p,
+      fetchImpl: (async () => new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: '답' }] } }],
+        usageMetadata: { totalTokenCount: 1234 },
+      }))) as never,
+    }).ask({ question: '질문' });
+
+    const inserts = calls.filter(call => call.text.includes('INSERT INTO usage_events'));
+    // Asking spends the same daily budget as summarising; without both rows
+    // the gauge keeps counting down only summaries and overstates headroom.
+    expect(inserts).toHaveLength(2);
+    expect(inserts.some(call => call.values?.includes('request'))).toBe(true);
+    expect(inserts.some(call => call.values?.includes(1234))).toBe(true);
+    expect(inserts[0].values?.[1]).toBe('team-1');
+  });
+
+  it('skips the token row when the provider reported no count', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    const { calls, pool: p } = pool([row()]);
+
+    await new AskService({ pool: p, fetchImpl: geminiOk('답') as never }).ask({ question: '질문' });
+
+    const inserts = calls.filter(call => call.text.includes('INSERT INTO usage_events'));
+    expect(inserts).toHaveLength(1);
+  });
+});
+
+describe('AskService follow-ups', () => {
+  it('searches on the thread so a terse follow-up still retrieves', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    const { calls, pool: p } = pool([row()]);
+
+    await new AskService({ pool: p, fetchImpl: geminiOk('답') as never }).ask({
+      question: '그럼 왜 그랬어?',
+      history: [{ question: '큐 접두사 문제', answer: '불일치였습니다' }],
+    });
+
+    // "그럼 왜 그랬어?" alone retrieves nothing useful; the earlier question
+    // is what carries the topic.
+    expect(String(calls[0].values?.[1])).toContain('큐 접두사 문제');
+    expect(String(calls[0].values?.[1])).toContain('그럼 왜 그랬어?');
+  });
+
+  it('shows the model the prior exchange', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    let prompt = '';
+    const { pool: p } = pool([row()]);
+
+    await new AskService({
+      pool: p,
+      fetchImpl: (async (_u: string, init: RequestInit) => {
+        prompt = JSON.parse(String(init.body)).contents[0].parts[0].text;
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }));
+      }) as never,
+    }).ask({
+      question: '왜?',
+      history: [{ question: '무슨 문제였어', answer: '접두사 불일치' }],
+    });
+
+    expect(prompt).toContain('## 이전 대화');
+    expect(prompt).toContain('접두사 불일치');
+  });
+
+  it('keeps only the last two turns so the prompt cannot grow without bound', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
+    resetVectorSupportCache(false);
+    let prompt = '';
+    const { pool: p } = pool([row()]);
+
+    await new AskService({
+      pool: p,
+      fetchImpl: (async (_u: string, init: RequestInit) => {
+        prompt = JSON.parse(String(init.body)).contents[0].parts[0].text;
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }));
+      }) as never,
+    }).ask({
+      question: '지금',
+      history: [
+        { question: '아주오래된질문', answer: 'a' },
+        { question: '두번째질문', answer: 'b' },
+        { question: '세번째질문', answer: 'c' },
+      ],
+    });
+
+    expect(prompt).not.toContain('아주오래된질문');
+    expect(prompt).toContain('세번째질문');
   });
 });

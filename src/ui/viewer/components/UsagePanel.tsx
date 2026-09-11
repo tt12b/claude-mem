@@ -65,7 +65,11 @@ export function UsagePanel() {
     <CollapsiblePanel
       storageKey="cm.panel.usage"
       title="요약 생성 사용량"
-      summary={`시도 ${usage.calls.total.toLocaleString()} · 실패 ${usage.calls.failed.toLocaleString()}`}
+      // Folded shows the three counts and nothing else; the token figure,
+      // the per-model breakdown and the failure reasons wait for a click.
+      summary={`시도 ${usage.calls.total.toLocaleString()}`
+        + ` · 성공 ${usage.calls.succeeded.toLocaleString()}`
+        + ` · 실패 ${usage.calls.failed.toLocaleString()}`}
     >
     <div className="usage-panel">
       <div className="usage-header">

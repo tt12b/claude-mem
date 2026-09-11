@@ -65,13 +65,24 @@ export function ModelPanel() {
     return null;
   }
 
-  const usable = report.models.filter(m => m.status === 'available' && m.configured);
   const emb = report.embeddings;
-  const summary = `사용 가능 ${usable.length}/${report.models.filter(m => m.configured).length}`
-    + (report.preferredModel ? ` · 선택 ${report.preferredModel}` : '')
-    // Folded is the panel's normal state, so the one fact that needs no
-    // unfolding — is semantic search keeping up — belongs in the summary.
-    + (emb?.enabled ? ` · 임베딩 ${emb.embedded}/${emb.total}${emb.stalled ? ' ⚠' : ''}` : '');
+  // Folded, the question is only ever "what is running right now and how
+  // much is left on it" — the other candidates matter when choosing one,
+  // which is what unfolding is for.
+  const current = report.models.find(m => m.active)
+    ?? report.models.find(m => m.name === report.preferredModel)
+    ?? report.models.find(m => m.status === 'available' && m.configured);
+  const summary = current
+    ? [
+        current.name,
+        `요청 ${current.calls.total.toLocaleString()}`,
+        current.remaining !== null
+          ? `남은 요청 ${current.remaining.toLocaleString()}${current.limit !== null ? `/${current.limit}` : ''}`
+          : '한도 미확인',
+        current.status === 'exhausted' ? '한도 소진' : null,
+        emb?.enabled ? `임베딩 ${emb.embedded}/${emb.total}${emb.stalled ? ' ⚠' : ''}` : null,
+      ].filter(Boolean).join(' · ')
+    : '사용 가능한 모델 없음';
 
   return (
     <CollapsiblePanel storageKey="cm.panel.models" title="요약 모델" summary={summary}>

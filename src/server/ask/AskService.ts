@@ -26,6 +26,7 @@ import { classifyHttpProviderError } from '../generation/providers/shared/error-
 import { embedSearchQuery } from '../generation/embeddings/query-embedding.js';
 import { buildSearchTerms } from '../../storage/postgres/search-terms.js';
 import { EMBEDDING_COLUMN, toVectorLiteral, vectorSupport } from '../../storage/postgres/vector-support.js';
+import { PostgresUsageRepository } from '../../storage/postgres/usage.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -41,6 +42,17 @@ const MAX_SOURCES = 20;
 const MAX_SOURCE_CHARS = 2_000;
 
 export const MAX_QUESTION_CHARS = 2_000;
+
+/**
+ * Prior exchanges carried into a follow-up. Two is enough for "그럼 왜
+ * 그랬어?" to resolve and keeps the prompt from growing without bound.
+ */
+export const MAX_HISTORY_TURNS = 2;
+
+export interface AskTurn {
+  question: string;
+  answer: string;
+}
 
 export interface AskSource {
   id: string;
@@ -62,6 +74,8 @@ interface SourceRow {
   content: string;
   created_at: Date;
   project_label: string | null;
+  team_id: string;
+  project_id: string;
 }
 
 /**
@@ -126,12 +140,21 @@ export class AskService {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  async ask(input: { question: string; project?: string | null; limit?: number }): Promise<AskResult> {
+  async ask(input: {
+    question: string;
+    project?: string | null;
+    limit?: number;
+    history?: AskTurn[];
+  }): Promise<AskResult> {
     const question = input.question.trim();
     if (question === '') throw new Error('question is empty');
 
+    const history = (input.history ?? []).slice(-MAX_HISTORY_TURNS);
     const limit = Math.min(Math.max(1, input.limit ?? DEFAULT_SOURCES), MAX_SOURCES);
-    const rows = await this.retrieve(question, input.project ?? null, limit);
+    // A follow-up is often too terse to retrieve on ("그럼 왜 그랬어?"), so
+    // the thread's earlier questions carry the topic into the search.
+    const retrievalQuery = [...history.map(turn => turn.question), question].join(' ');
+    const rows = await this.retrieve(retrievalQuery, input.project ?? null, limit);
 
     const sources: AskSource[] = rows.map(row => ({
       id: row.id,
@@ -151,8 +174,12 @@ export class AskService {
       };
     }
 
-    const prompt = this.buildPrompt(question, rows);
-    const { answer, model } = await this.generate(prompt);
+    const prompt = this.buildPrompt(question, rows, history);
+    const { answer, model, tokensUsed } = await this.generate(prompt);
+    // Attribute the spend to the team whose records were read. Without this
+    // the dashboard's "남은 요청" keeps counting down only summarisation
+    // while asking quietly draws from the same daily allowance.
+    await this.meter({ row: rows[0], model, tokensUsed });
     return { answer, model, sources, empty: false };
   }
 
@@ -188,7 +215,7 @@ export class AskService {
 
     const result = await this.options.pool.query<SourceRow>(
       `
-        SELECT o.id, o.content, o.created_at,
+        SELECT o.id, o.content, o.created_at, o.team_id, o.project_id,
                COALESCE(s.metadata->>'project', p.name, 'unknown') AS project_label
         FROM observations o
         LEFT JOIN server_sessions s ON s.id = o.server_session_id
@@ -215,7 +242,7 @@ export class AskService {
     return result.rows;
   }
 
-  private buildPrompt(question: string, rows: SourceRow[]): string {
+  private buildPrompt(question: string, rows: SourceRow[], history: AskTurn[] = []): string {
     // Oldest first: the records often revisit the same problem, and a reader
     // asked to describe "how we fixed X" needs them in the order they happened.
     const ordered = [...rows].sort(
@@ -228,11 +255,18 @@ export class AskService {
         + row.content.slice(0, MAX_SOURCE_CHARS);
     }).join('\n\n');
 
+    const priorTurns = history.length > 0
+      ? ['---', '## 이전 대화', history
+          .map(turn => `**질문:** ${turn.question}\n**답변:** ${turn.answer}`)
+          .join('\n\n')]
+      : [];
+
     return [
       briefing,
       '---',
       '## 참고할 기록',
       records,
+      ...priorTurns,
       '---',
       '## 질문',
       question,
@@ -244,7 +278,46 @@ export class AskService {
    * quota. Any other failure is the answer failing, not the model being
    * spent, so it stops there rather than burning the rest of the list.
    */
-  private async generate(prompt: string): Promise<{ answer: string; model: string }> {
+  /**
+   * Record the call so the model panel counts it.
+   *
+   * Best-effort: an answer already produced must not be thrown away because
+   * bookkeeping failed. Both rows carry `source: 'ask'` so the two consumers
+   * can be told apart later.
+   */
+  private async meter(input: {
+    row: SourceRow | undefined;
+    model: string;
+    tokensUsed: number | null;
+  }): Promise<void> {
+    if (!input.row) return;
+    try {
+      const repo = new PostgresUsageRepository(this.options.pool);
+      const metadata = { model: input.model, source: 'ask' };
+      await repo.record({
+        teamId: input.row.team_id,
+        projectId: input.row.project_id,
+        kind: 'request',
+        quantity: 1,
+        metadata,
+      });
+      if (input.tokensUsed !== null) {
+        await repo.record({
+          teamId: input.row.team_id,
+          projectId: input.row.project_id,
+          kind: 'tokens',
+          quantity: input.tokensUsed,
+          metadata,
+        });
+      }
+    } catch (error) {
+      logger.warn('SYSTEM', 'could not meter an ask call', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async generate(prompt: string): Promise<{ answer: string; model: string; tokensUsed: number | null }> {
     const apiKey = askApiKey();
     if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
 
@@ -254,7 +327,8 @@ export class AskService {
     let lastError: unknown;
     for (const model of models) {
       try {
-        return { answer: await this.callGemini(apiKey, model, prompt), model };
+        const { text, tokensUsed } = await this.callGemini(apiKey, model, prompt);
+        return { answer: text, model, tokensUsed };
       } catch (error) {
         lastError = error;
         const kind = (error as { kind?: string })?.kind;
@@ -265,7 +339,11 @@ export class AskService {
     throw lastError ?? new Error('no model answered');
   }
 
-  private async callGemini(apiKey: string, model: string, prompt: string): Promise<string> {
+  private async callGemini(
+    apiKey: string,
+    model: string,
+    prompt: string,
+  ): Promise<{ text: string; tokensUsed: number | null }> {
     const url = `${GEMINI_API_URL}/${encodeURIComponent(model)}:generateContent`
       + `?key=${encodeURIComponent(apiKey)}`;
     const response = await this.fetchImpl(url, {
@@ -287,6 +365,7 @@ export class AskService {
 
     let data: {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      usageMetadata?: { totalTokenCount?: number };
       error?: { message?: string };
     };
     try {
@@ -298,6 +377,7 @@ export class AskService {
 
     const text = data.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim() ?? '';
     if (!text) throw new Error('Gemini returned an empty answer');
-    return text;
+    const total = data.usageMetadata?.totalTokenCount;
+    return { text, tokensUsed: typeof total === 'number' ? total : null };
   }
 }

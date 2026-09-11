@@ -366,7 +366,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     // measured from the last midnight-Pacific reset.
     const dayStart = quotaDayStart();
     const embeddings = await this.embeddingStatus();
-    const [calls, tokens, active, limits] = await Promise.all([
+    const [calls, tokens, askCalls, active, limits] = await Promise.all([
       this.options.pool.query<{ model: string | null; event_type: string; count: string }>(
         `SELECT details->>'model' AS model, event_type, count(*)::text AS count
            FROM observation_generation_job_events
@@ -380,6 +380,17 @@ export class ServerDashboardApiRoutes implements RouteHandler {
           WHERE kind = 'tokens' AND created_at >= $1
           GROUP BY 1`,
         [since],
+      ),
+      // Dashboard questions call the same models on the same key, so they
+      // draw down the same daily allowance. They leave no generation-job
+      // row, so without this the gauge would only ever count summarisation
+      // and overstate what is left.
+      this.options.pool.query<{ model: string | null; count: string }>(
+        `SELECT metadata->>'model' AS model, count(*)::text AS count
+           FROM usage_events
+          WHERE kind = 'request' AND metadata->>'source' = 'ask' AND created_at >= $1
+          GROUP BY 1`,
+        [dayStart],
       ),
       this.options.pool.query<{ model: string | null; created_at: Date }>(
         `SELECT details->>'model' AS model, created_at
@@ -408,6 +419,14 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       const entry = callsByModel.get(key) ?? { succeeded: 0, failed: 0 };
       if (row.event_type === 'completed') entry.succeeded += Number(row.count);
       else entry.failed += Number(row.count);
+      callsByModel.set(key, entry);
+    }
+    // Only successful asks are recorded, and a success draws down the
+    // allowance exactly like a completed generation does.
+    for (const row of askCalls.rows) {
+      const key = row.model ?? 'unknown';
+      const entry = callsByModel.get(key) ?? { succeeded: 0, failed: 0 };
+      entry.succeeded += Number(row.count);
       callsByModel.set(key, entry);
     }
 
@@ -522,7 +541,9 @@ export class ServerDashboardApiRoutes implements RouteHandler {
    * an answer the reader can act on instead of a blank panel.
    */
   private async handleAsk(req: Request, res: Response): Promise<void> {
-    const body = (req.body ?? {}) as { question?: unknown; project?: unknown; limit?: unknown };
+    const body = (req.body ?? {}) as {
+      question?: unknown; project?: unknown; limit?: unknown; history?: unknown;
+    };
     const question = typeof body.question === 'string' ? body.question.trim() : '';
     if (question === '') {
       res.status(400).json({ error: 'ValidationError', message: '질문이 비어 있습니다' });
@@ -535,9 +556,17 @@ export class ServerDashboardApiRoutes implements RouteHandler {
 
     const project = typeof body.project === 'string' && body.project !== '' ? body.project : null;
     const limit = typeof body.limit === 'number' ? body.limit : undefined;
+    const history = Array.isArray(body.history)
+      ? body.history
+          .filter((turn): turn is { question: string; answer: string } =>
+            typeof turn === 'object' && turn !== null
+            && typeof (turn as { question?: unknown }).question === 'string'
+            && typeof (turn as { answer?: unknown }).answer === 'string')
+          .map(turn => ({ question: turn.question, answer: turn.answer }))
+      : [];
 
     try {
-      const result = await new AskService({ pool: this.options.pool }).ask({ question, project, limit });
+      const result = await new AskService({ pool: this.options.pool }).ask({ question, project, limit, history });
       res.json(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

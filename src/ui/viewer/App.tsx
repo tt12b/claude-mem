@@ -3,7 +3,7 @@ import { Header } from './components/Header';
 import { Feed } from './components/Feed';
 import { UsagePanel } from './components/UsagePanel';
 import { ModelPanel } from './components/ModelPanel';
-import { AskPanel } from './components/AskPanel';
+import { AskChat } from './components/AskChat';
 import { ContextSettingsModal } from './components/ContextSettingsModal';
 import { LogsDrawer } from './components/LogsModal';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
@@ -123,8 +123,6 @@ export function App() {
         }}
       />
 
-      <AskPanel project={currentFilter || null} />
-
       <ModelPanel />
 
       <UsagePanel />
@@ -138,6 +136,8 @@ export function App() {
         isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading || pagination.messages.isLoading}
         hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore || pagination.messages.hasMore}
       />
+
+      <AskChat project={currentFilter || null} />
 
       {!welcomeDismissed && (
         <WelcomeCard onDismiss={() => setWelcomeDismissed(true)} />
