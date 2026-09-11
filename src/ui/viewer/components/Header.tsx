@@ -1,7 +1,6 @@
 import React from 'react';
 import { ThemeToggle } from './ThemeToggle';
 import { ThemePreference } from '../hooks/useTheme';
-import { GitHubStarsButton } from './GitHubStarsButton';
 import { useSpinningFavicon } from '../hooks/useSpinningFavicon';
 
 interface HeaderProps {
@@ -45,7 +44,6 @@ export function Header({
         </h1>
       </div>
       <div className="status">
-        <GitHubStarsButton username="thedotmack" repo="claude-mem" />
         <select
           value={currentFilter}
           onChange={e => onFilterChange(e.target.value)}
