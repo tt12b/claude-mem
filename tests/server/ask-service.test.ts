@@ -515,3 +515,40 @@ describe('AskService model preference', () => {
     expect(tried[0]).toBe('first');
   });
 });
+
+describe('AskService transient failures', () => {
+  it('moves to the next model on a 503 instead of surfacing the error', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'down,up';
+    resetVectorSupportCache(false);
+    const tried: string[] = [];
+    const { pool: p } = pool([row()]);
+
+    // Summarising can afford to wait for a retry; an answer cannot — the
+    // reader would just see "gemini upstream error (status 503)".
+    const result = await new AskService({
+      pool: p,
+      fetchImpl: (async (url: string) => {
+        const model = url.split('/models/')[1].split(':')[0];
+        tried.push(model);
+        if (model === 'down') return new Response('overloaded', { status: 503 });
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '답' }] } }] }));
+      }) as never,
+    }).ask({ question: '질문' });
+
+    expect(tried).toEqual(['down', 'up']);
+    expect(result.model).toBe('up');
+  });
+
+  it('gives up once every candidate is down', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'a,b';
+    resetVectorSupportCache(false);
+    const { pool: p } = pool([row()]);
+
+    await expect(new AskService({
+      pool: p,
+      fetchImpl: (async () => new Response('overloaded', { status: 503 })) as never,
+    }).ask({ question: '질문' })).rejects.toThrow();
+  });
+});

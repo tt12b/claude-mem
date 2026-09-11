@@ -33,8 +33,21 @@ import type { PostgresPool } from '../../storage/postgres/pool.js';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-/** Classifications that mean "this model is spent, try the next one". */
-const FAILOVER_KINDS = new Set(['quota_exhausted', 'insufficient_quota', 'resource_exhausted', 'rate_limit']);
+/**
+ * Classifications that mean "try the next model".
+ *
+ * Wider than the summariser's list, and deliberately so: a summary job that
+ * hits a 503 is retried minutes later, but an answer has no second chance —
+ * the reader just sees the error. With four candidates configured, moving
+ * on costs one request and usually produces an answer.
+ */
+const FAILOVER_KINDS = new Set([
+  'quota_exhausted',
+  'insufficient_quota',
+  'resource_exhausted',
+  'rate_limit',
+  'transient',
+]);
 
 /** Observations handed to the model. Enough to answer, few enough to stay cheap. */
 const DEFAULT_SOURCES = 8;
