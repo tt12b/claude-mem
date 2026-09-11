@@ -1386,6 +1386,23 @@
       box-shadow: -2px 0 16px rgba(0, 0, 0, 0.18);
     }
 
+    /* The chat is fixed, so the dashboard has to yield the width itself or
+       the two overlap. Keep this in step with .ask-chat's width. */
+    #root {
+      padding-right: 0;
+      transition: padding-right 160ms ease;
+    }
+
+    body.ask-open #root {
+      padding-right: 400px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #root {
+        transition: none;
+      }
+    }
+
     .ask-chat-header {
       display: flex;
       align-items: center;
@@ -1578,6 +1595,11 @@
     @media (max-width: 900px) {
       .ask-chat {
         width: 100vw;
+      }
+
+      /* Full width leaves nothing to push the dashboard into. */
+      body.ask-open #root {
+        padding-right: 0;
       }
     }
 

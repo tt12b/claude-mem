@@ -16,8 +16,15 @@ import { API_ENDPOINTS } from '../constants/api';
  */
 
 const OPEN_KEY = 'cm.ask.open';
+const TURNS_KEY = 'cm.ask.turns';
 /** Turns sent back for context. Matches the server's own cap. */
 const HISTORY_TURNS = 2;
+/**
+ * Turns kept across reloads. The thread is a convenience, not a record, so
+ * it is capped: localStorage is a few MB per origin and a long thread with
+ * its sources would crowd out everything else the viewer stores.
+ */
+const KEPT_TURNS = 30;
 
 interface AskSource {
   id: string;
@@ -63,6 +70,47 @@ function writeOpen(value: boolean): void {
   }
 }
 
+/**
+ * The thread survives a reload. It lives only in this browser — the server
+ * keeps no record of a question beyond the usage counter — so treat a miss
+ * or a malformed value as "no thread yet" rather than an error.
+ */
+function readTurns(): Turn[] {
+  try {
+    const raw = localStorage.getItem(TURNS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((turn): turn is Turn =>
+        typeof turn === 'object' && turn !== null
+        && typeof (turn as Turn).question === 'string'
+        && typeof (turn as Turn).answer === 'string')
+      .map(turn => ({
+        question: turn.question,
+        answer: turn.answer,
+        model: typeof turn.model === 'string' ? turn.model : '',
+        sources: Array.isArray(turn.sources) ? turn.sources : [],
+        failed: turn.failed === true,
+      }))
+      .slice(-KEPT_TURNS);
+  } catch {
+    return [];
+  }
+}
+
+function writeTurns(turns: Turn[]): void {
+  try {
+    if (turns.length === 0) {
+      localStorage.removeItem(TURNS_KEY);
+      return;
+    }
+    localStorage.setItem(TURNS_KEY, JSON.stringify(turns.slice(-KEPT_TURNS)));
+  } catch {
+    // Over quota or storage blocked. The thread still works this session.
+  }
+}
+
 interface AskChatProps {
   /** Project filter in force, so answers match what the feed shows. */
   project: string | null;
@@ -71,7 +119,7 @@ interface AskChatProps {
 export function AskChat({ project }: AskChatProps) {
   const [open, setOpen] = useState<boolean>(readOpen);
   const [status, setStatus] = useState<AskStatus | null>(null);
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [turns, setTurns] = useState<Turn[]>(readTurns);
   const [question, setQuestion] = useState('');
   const [pending, setPending] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -96,6 +144,18 @@ export function AskChat({ project }: AskChatProps) {
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
+  }, [open]);
+
+  // Persist the thread so a reload does not wipe what was asked.
+  useEffect(() => {
+    writeTurns(turns);
+  }, [turns]);
+
+  // While the chat is docked, push the dashboard left instead of covering
+  // it — the answer and the feed it cites get read side by side.
+  useEffect(() => {
+    document.body.classList.toggle('ask-open', open);
+    return () => document.body.classList.remove('ask-open');
   }, [open]);
 
   const toggle = useCallback(() => {
