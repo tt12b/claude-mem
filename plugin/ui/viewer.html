@@ -1821,6 +1821,73 @@
       color: var(--color-text-muted);
     }
 
+    /* A failure row opens to the individual jobs behind it: the count says
+       how many summaries were lost, not which. */
+    .usage-reason-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+      width: 100%;
+      padding: 3px 0;
+      font: inherit;
+      text-align: left;
+      color: inherit;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+    }
+
+    .usage-reason-caret {
+      color: var(--color-text-tertiary);
+      font-size: 10px;
+    }
+
+    .usage-failures {
+      margin: 4px 0 6px 16px;
+      padding: 0;
+      list-style: none;
+      border-left: 2px solid var(--color-border-primary);
+    }
+
+    .usage-failures li {
+      padding: 4px 0 4px 10px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .usage-failure-when {
+      display: block;
+      font-family: var(--font-mono, monospace);
+      color: var(--color-text-tertiary);
+    }
+
+    .usage-failure-what {
+      display: block;
+      color: var(--color-text-secondary);
+    }
+
+    .usage-failure-meta {
+      display: block;
+      font-family: var(--font-mono, monospace);
+      color: var(--color-text-muted);
+    }
+
+    .usage-failure-empty {
+      color: var(--color-text-muted);
+      font-style: italic;
+    }
+
+    .usage-reason-detail {
+      display: block;
+      width: 100%;
+      margin-top: 2px;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--color-text-muted);
+      overflow-wrap: anywhere;
+    }
+
     .usage-reason-count {
       font-variant-numeric: tabular-nums;
       color: var(--color-text);

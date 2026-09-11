@@ -141,6 +141,8 @@ export interface MarkGenerationFailedInput {
   job: PostgresObservationGenerationJob;
   reason: string;
   classification?: string;
+  /** Finer reason from the provider adapter, when it could name one. */
+  category?: string;
   retryable: boolean;
   workerId?: string;
 }
@@ -173,7 +175,11 @@ export async function markGenerationFailed(input: MarkGenerationFailedInput): Pr
       projectId: fresh.projectId,
       teamId: fresh.teamId,
       status: target,
-      lastError: { reason: input.reason, classification: input.classification ?? null },
+      lastError: {
+        reason: input.reason,
+        classification: input.classification ?? null,
+        category: input.category ?? null,
+      },
       ...(canRetry
         ? { nextAttemptAt: nextAttemptFor(input.classification, fresh.attempts) }
         : {}),

@@ -23,6 +23,30 @@ const FAILURE_LABELS: Record<string, string> = {
   unknown: '원인 미상',
 };
 
+/** Finer reasons behind a 400. Named so the row says more than "unrecoverable". */
+interface Failure {
+  id: string;
+  sourceType: string;
+  jobType: string;
+  attempts: number;
+  failedAtEpoch: number;
+  classification: string;
+  category: string | null;
+  project: string | null;
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  role_sequence: '대화 순서 오류',
+  context_limit: '입력이 너무 김',
+  model_unsupported: '지원하지 않는 모델',
+  api_key: 'API 키 문제',
+  safety_blocked: '안전 정책 차단',
+  location_unsupported: '지원하지 않는 지역',
+  empty_content: '빈 요청',
+  invalid_argument: '요청 형식 오류',
+  unknown_bad_request: '분류되지 않은 400',
+};
+
 /**
  * What the provider was asked to do in this window.
  *
@@ -32,6 +56,22 @@ const FAILURE_LABELS: Record<string, string> = {
  */
 export function UsagePanel() {
   const [usage, setUsage] = useState<UsageReport | null>(null);
+  const [failures, setFailures] = useState<Failure[]>([]);
+  const [openReason, setOpenReason] = useState<string | null>(null);
+
+  // Fetched only when a row is opened: the list is detail, and most visits
+  // never look at it.
+  const toggleReason = useCallback(async (classification: string) => {
+    const next = openReason === classification ? null : classification;
+    setOpenReason(next);
+    if (next === null || failures.length > 0) return;
+    try {
+      const response = await fetch(`${API_ENDPOINTS.FAILURES}?days=1`);
+      if (response.ok) setFailures(((await response.json()) as { failures: Failure[] }).failures ?? []);
+    } catch {
+      // The row still shows the count; the list just stays empty.
+    }
+  }, [openReason, failures.length]);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -112,10 +152,54 @@ export function UsagePanel() {
           <ul className="usage-reasons">
             {usage.failureReasons.map(reason => (
               <li key={reason.classification}>
-                <span className="usage-reason-name">
-                  {FAILURE_LABELS[reason.classification] ?? reason.classification}
-                </span>
-                <span className="usage-reason-count">{reason.count}건</span>
+                {/* The count answers "how many"; each failure is a summary
+                    that will never exist, so the specific job has to be
+                    reachable too. */}
+                <button
+                  type="button"
+                  className="usage-reason-row"
+                  onClick={() => toggleReason(reason.classification)}
+                  aria-expanded={openReason === reason.classification}
+                >
+                  <span className="usage-reason-caret" aria-hidden="true">
+                    {openReason === reason.classification ? '▾' : '▸'}
+                  </span>
+                  <span className="usage-reason-name">
+                    {FAILURE_LABELS[reason.classification] ?? reason.classification}
+                  </span>
+                  <span className="usage-reason-count">{reason.count}건</span>
+                  {reason.detail && (
+                    <span className="usage-reason-detail">
+                      {CATEGORY_LABELS[reason.detail] ?? reason.detail}
+                    </span>
+                  )}
+                </button>
+                {openReason === reason.classification && (
+                  <ul className="usage-failures">
+                    {failures
+                      .filter(f => f.classification === reason.classification)
+                      .map(f => (
+                        <li key={f.id}>
+                          <span className="usage-failure-when">
+                            {new Date(f.failedAtEpoch).toLocaleString()}
+                          </span>
+                          <span className="usage-failure-what">
+                            {f.category ? (CATEGORY_LABELS[f.category] ?? f.category) : '상세 없음'}
+                            {' · '}{f.sourceType}
+                            {' · '}시도 {f.attempts}회
+                          </span>
+                          <span className="usage-failure-meta">
+                            {f.project ?? 'unknown'} · {f.id.slice(0, 8)}
+                          </span>
+                        </li>
+                      ))}
+                    {failures.filter(f => f.classification === reason.classification).length === 0 && (
+                      <li className="usage-failure-empty">
+                        최근 목록에 없습니다 (50건까지만 조회)
+                      </li>
+                    )}
+                  </ul>
+                )}
               </li>
             ))}
           </ul>

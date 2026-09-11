@@ -209,6 +209,7 @@ export class ProviderObservationGenerator {
         job: fresh,
         reason: error instanceof Error ? error.message : String(error),
         classification: classified?.kind ?? 'unknown',
+        ...(classified?.category ? { category: classified.category } : {}),
         retryable,
         ...(this.options.workerId !== undefined ? { workerId: this.options.workerId } : {}),
       });

@@ -252,6 +252,10 @@ describe('GeminiObservationProvider', () => {
     'context_limit',
     'model_unsupported',
     'api_key',
+    'safety_blocked',
+    'location_unsupported',
+    'empty_content',
+    'invalid_argument',
     'unknown_bad_request',
   ]);
 
@@ -260,7 +264,8 @@ describe('GeminiObservationProvider', () => {
     ['context_limit', 'Request contains 120000 tokens which exceeds the maximum token limit.'],
     ['model_unsupported', 'Model gemini-example is not supported for generateContent.'],
     ['api_key', 'API_KEY_INVALID: API key not valid.'],
-    ['unknown_bad_request', 'Invalid JSON payload received. Unknown name "foo".'],
+    ['invalid_argument', 'Invalid JSON payload received. Unknown name "foo".'],
+    ['unknown_bad_request', 'Something the categoriser has never seen.'],
   ] as const) {
     it(`classifies Gemini 400 as closed category ${expectedCategory}`, () => {
       const rawBody = `${bodyText} RAW_PROVIDER_BODY`;

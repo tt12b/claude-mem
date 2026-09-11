@@ -18,6 +18,12 @@ export class ServerClassifiedProviderError extends Error {
   readonly kind: ServerProviderErrorClass;
   readonly retryAfterMs?: number;
   readonly cause: unknown;
+  /**
+   * Finer-grained reason, when the provider adapter could name one. A fixed
+   * enum, never provider text — the raw body is deliberately not recorded
+   * because it can echo the prompt back.
+   */
+  readonly category?: string;
 
   constructor(
     message: string,
@@ -25,6 +31,7 @@ export class ServerClassifiedProviderError extends Error {
       kind: ServerProviderErrorClass;
       cause: unknown;
       retryAfterMs?: number;
+      category?: string;
     },
   ) {
     super(message);
@@ -33,6 +40,9 @@ export class ServerClassifiedProviderError extends Error {
     this.cause = opts.cause;
     if (opts.retryAfterMs !== undefined) {
       this.retryAfterMs = opts.retryAfterMs;
+    }
+    if (opts.category !== undefined) {
+      this.category = opts.category;
     }
   }
 }

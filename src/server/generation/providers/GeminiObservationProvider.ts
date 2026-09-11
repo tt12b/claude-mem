@@ -40,6 +40,10 @@ export type GeminiBadRequestCategory =
   | 'context_limit'
   | 'model_unsupported'
   | 'api_key'
+  | 'safety_blocked'
+  | 'location_unsupported'
+  | 'empty_content'
+  | 'invalid_argument'
   | 'unknown_bad_request';
 
 export function categorizeGeminiBadRequest(bodyText: string): GeminiBadRequestCategory {
@@ -52,6 +56,30 @@ export function categorizeGeminiBadRequest(bodyText: string): GeminiBadRequestCa
     lower.includes('invalid api key')
   ) {
     return 'api_key';
+  }
+
+  // Google names the refusal rather than the request; the prompt itself is
+  // never echoed, so these stay safe to record.
+  if (
+    lower.includes('prohibited_content') ||
+    lower.includes('blocked due to safety') ||
+    lower.includes('safety_settings') ||
+    lower.includes('blockreason')
+  ) {
+    return 'safety_blocked';
+  }
+
+  if (lower.includes('user location is not supported')) {
+    return 'location_unsupported';
+  }
+
+  if (
+    lower.includes('contents is not specified') ||
+    lower.includes('contents must not be empty') ||
+    lower.includes('at least one content') ||
+    lower.includes('empty content')
+  ) {
+    return 'empty_content';
   }
 
   if (
@@ -87,6 +115,18 @@ export function categorizeGeminiBadRequest(bodyText: string): GeminiBadRequestCa
     return 'model_unsupported';
   }
 
+  // Google's generic request-shape errors. Last, so a more specific
+  // category above always wins — "Invalid value at contents[0].role" is a
+  // role problem, not a nameless one.
+  if (
+    lower.includes('invalid json payload') ||
+    lower.includes('unknown name') ||
+    lower.includes('invalid value at') ||
+    lower.includes('invalid_argument')
+  ) {
+    return 'invalid_argument';
+  }
+
   return 'unknown_bad_request';
 }
 
@@ -115,6 +155,7 @@ export function classifyGeminiServerError(input: ClassifyGeminiServerErrorInput)
     const category = categorizeGeminiBadRequest(bodyText);
     return new ServerClassifiedProviderError(`Gemini bad request: ${category}`, {
       kind: 'unrecoverable',
+      category,
       cause: new Error('Gemini HTTP error (status 400)'),
     });
   }

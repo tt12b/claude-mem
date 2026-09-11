@@ -164,6 +164,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     app.post('/api/ask', express.json({ limit: '32kb' }), this.wrap(this.handleAsk));
     app.get('/api/ask/status', this.wrap(this.handleAskStatus));
     app.post('/api/embeddings/run', this.wrap(this.handleRunEmbeddings));
+    app.get('/api/failures', this.wrap(this.handleFailures));
     app.get('/api/ask/notes', this.wrap(this.handleListNotes));
     app.delete('/api/ask/notes/:id', this.wrap(this.handleDeleteNote));
     app.get('/api/context/preview', this.wrap(this.handleContextPreview));
@@ -285,8 +286,16 @@ export class ServerDashboardApiRoutes implements RouteHandler {
           GROUP BY status`,
         [since],
       ),
-      this.options.pool.query<{ classification: string | null; count: string }>(
-        `SELECT last_error->>'classification' AS classification, count(*)::text AS count
+      // The provider's finer category rides along. `unrecoverable` says a
+      // summary was lost but not why, and these jobs are never retried, so
+      // this is the only account there is. The provider's raw body is
+      // deliberately not stored — it can echo the prompt back, and this
+      // route has no authentication.
+      this.options.pool.query<{ classification: string | null; count: string; detail: string | null }>(
+        `SELECT last_error->>'classification' AS classification,
+                count(*)::text AS count,
+                (array_agg(last_error->>'category' ORDER BY updated_at DESC)
+                   FILTER (WHERE last_error->>'category' IS NOT NULL))[1] AS detail
            FROM observation_generation_jobs
           WHERE status = 'failed' AND created_at >= $1
           GROUP BY 1
@@ -324,6 +333,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       failureReasons: failures.rows.map(r => ({
         classification: r.classification ?? 'unknown',
         count: Number(r.count),
+        detail: r.detail ?? null,
       })),
     });
   }
@@ -609,6 +619,58 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       available: askApiKey() !== '' && models.length > 0,
       briefingLoaded: askBriefingLoaded(),
       models,
+    });
+  }
+
+  /**
+   * The individual failed jobs behind the summary counts.
+   *
+   * The counts group by classification, which answers "how many" but not
+   * "which one" — and a terminal failure is a summary that will never be
+   * written, so the operator needs to see the specific job. Only fields we
+   * control are returned: the provider's raw body is never stored.
+   */
+  private async handleFailures(req: Request, res: Response): Promise<void> {
+    const rawDays = Number.parseInt(String(req.query.days ?? '1'), 10);
+    const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 30) : 1;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const result = await this.options.pool.query<{
+      id: string;
+      source_type: string;
+      job_type: string;
+      attempts: number;
+      updated_at: Date;
+      classification: string | null;
+      category: string | null;
+      project_label: string | null;
+    }>(
+      `
+        SELECT j.id, j.source_type, j.job_type, j.attempts, j.updated_at,
+               j.last_error->>'classification' AS classification,
+               j.last_error->>'category' AS category,
+               COALESCE(s.metadata->>'project', p.name, 'unknown') AS project_label
+        FROM observation_generation_jobs j
+        LEFT JOIN server_sessions s ON s.id = j.server_session_id
+        LEFT JOIN projects p ON p.id = j.project_id
+        WHERE j.status = 'failed' AND j.created_at >= $1
+        ORDER BY j.updated_at DESC
+        LIMIT 50
+      `,
+      [since],
+    );
+
+    res.json({
+      failures: result.rows.map(row => ({
+        id: row.id,
+        sourceType: row.source_type,
+        jobType: row.job_type,
+        attempts: row.attempts,
+        failedAtEpoch: toEpoch(row.updated_at),
+        classification: row.classification ?? 'unknown',
+        category: row.category ?? null,
+        project: row.project_label,
+      })),
     });
   }
 

@@ -134,7 +134,12 @@ export interface UsageReport {
   };
   tokens: Array<{ provider: string | null; model: string | null; total: number }>;
   jobs: Record<string, number>;
-  failureReasons: Array<{ classification: string; count: number }>;
+  failureReasons: Array<{
+    classification: string;
+    count: number;
+    /** Newest provider message for this class — why the summary was lost. */
+    detail?: string | null;
+  }>;
 }
 
 export interface ProjectCatalog {
