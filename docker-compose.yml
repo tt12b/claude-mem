@@ -160,7 +160,13 @@ services:
       # does. This split keeps HTTP latency unaffected by provider calls.
       CLAUDE_MEM_GENERATION_DISABLED: "true"
     ports:
-      - "37877:37877"
+      # Bind address is configurable because "who can reach the dashboard" is
+      # a deployment question, not a code one. The dashboard API (/api/*) has
+      # no authentication — it can read every stored observation and spend
+      # provider quota — so on anything but a trusted network set
+      # CLAUDE_MEM_BIND_ADDRESS to one interface (a Tailscale address, or
+      # 127.0.0.1) instead of leaving it on every interface.
+      - "${CLAUDE_MEM_BIND_ADDRESS:-0.0.0.0}:37877:37877"
     volumes:
       - claude-mem-data:/data/claude-mem
       # #2558 — credentials-file mount. Place provider/API secrets in a file
