@@ -1323,6 +1323,119 @@
       color: var(--color-warning, #d29922);
     }
 
+    /* Ask panel: a question about the stored records, answered from them. */
+    .ask-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .ask-input-row {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .ask-input {
+      flex: 1;
+      resize: vertical;
+      min-height: 44px;
+      padding: 8px 10px;
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--color-text-primary);
+      background: var(--color-bg-primary);
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+    }
+
+    .ask-input:focus {
+      outline: none;
+      border-color: var(--color-border-focus);
+    }
+
+    .ask-submit {
+      padding: 0 16px;
+      font: inherit;
+      font-size: 13px;
+      white-space: nowrap;
+      color: var(--color-text-button);
+      background: var(--color-accent-primary);
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .ask-submit:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .ask-result {
+      padding: 12px;
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+    }
+
+    .ask-answer {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.65;
+      color: var(--color-text-primary);
+      white-space: pre-wrap;
+    }
+
+    .ask-sources {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
+
+    .ask-sources summary {
+      cursor: pointer;
+    }
+
+    .ask-sources ul {
+      margin: 8px 0 0;
+      padding-left: 16px;
+    }
+
+    .ask-sources li {
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .ask-source-meta {
+      display: block;
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      color: var(--color-text-tertiary);
+    }
+
+    .ask-source-text {
+      color: var(--color-text-secondary);
+    }
+
+    .ask-model {
+      font-family: var(--font-mono, monospace);
+    }
+
+    .ask-error,
+    .ask-unavailable {
+      margin: 0;
+      font-size: 12px;
+      color: var(--color-accent-error);
+    }
+
+    .ask-note {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--color-text-muted);
+    }
+
     /* Semantic-search health. A stalled backfill is invisible otherwise:
        search silently degrades to keywords and nothing looks broken. */
     .embedding-row {

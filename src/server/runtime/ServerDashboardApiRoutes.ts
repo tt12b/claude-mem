@@ -31,6 +31,7 @@ import { PostgresServerSettingsRepository, PREFERRED_MODEL_KEY } from '../../sto
 import { logger } from '../../utils/logger.js';
 import { QUOTA_TIMEZONE, nextQuotaReset, quotaDayStart } from '../services/quota-day.js';
 import { PostgresObservationRepository } from '../../storage/postgres/observations.js';
+import { AskService, MAX_QUESTION_CHARS, askApiKey, askBriefingLoaded, askModels } from '../ask/AskService.js';
 import { vectorSupport } from '../../storage/postgres/vector-support.js';
 import { resolveEmbeddingProvider } from '../generation/embeddings/GeminiEmbeddingProvider.js';
 import { resolveEmbeddingIntervalMs } from '../services/ObservationEmbeddingScheduler.js';
@@ -153,6 +154,8 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     // rest of the dashboard: it changes which model is tried first, nothing
     // that leaves the deployment.
     app.post('/api/models/active', express.json(), this.wrap(this.handleSelectModel));
+    app.post('/api/ask', express.json({ limit: '32kb' }), this.wrap(this.handleAsk));
+    app.get('/api/ask/status', this.wrap(this.handleAskStatus));
     app.get('/api/context/preview', this.wrap(this.handleContextPreview));
     app.get('/api/logs', this.wrap(this.handleLogs));
     app.get('/stream', this.handleStream.bind(this));
@@ -509,6 +512,47 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         if (a.configured !== b.configured) return a.configured ? -1 : 1;
         return a.priority - b.priority;
       }),
+    });
+  }
+
+  /**
+   * Answer a question from the dashboard out of the stored observations.
+   *
+   * Errors are reported as text rather than a 500 so a spent quota reads as
+   * an answer the reader can act on instead of a blank panel.
+   */
+  private async handleAsk(req: Request, res: Response): Promise<void> {
+    const body = (req.body ?? {}) as { question?: unknown; project?: unknown; limit?: unknown };
+    const question = typeof body.question === 'string' ? body.question.trim() : '';
+    if (question === '') {
+      res.status(400).json({ error: 'ValidationError', message: '질문이 비어 있습니다' });
+      return;
+    }
+    if (question.length > MAX_QUESTION_CHARS) {
+      res.status(400).json({ error: 'ValidationError', message: `질문은 ${MAX_QUESTION_CHARS}자 이내여야 합니다` });
+      return;
+    }
+
+    const project = typeof body.project === 'string' && body.project !== '' ? body.project : null;
+    const limit = typeof body.limit === 'number' ? body.limit : undefined;
+
+    try {
+      const result = await new AskService({ pool: this.options.pool }).ask({ question, project, limit });
+      res.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn('SYSTEM', 'ask failed', { error: message });
+      res.status(502).json({ error: 'AskFailed', message });
+    }
+  }
+
+  /** Whether the panel can be used at all, so the UI can say why not. */
+  private async handleAskStatus(_req: Request, res: Response): Promise<void> {
+    const models = askModels();
+    res.json({
+      available: askApiKey() !== '' && models.length > 0,
+      briefingLoaded: askBriefingLoaded(),
+      models,
     });
   }
 

@@ -7,5 +7,7 @@ export const API_ENDPOINTS = {
   MODELS: '/api/models',
   MODELS_ACTIVE: '/api/models/active',
   SETTINGS: '/api/settings',
+  ASK: '/api/ask',
+  ASK_STATUS: '/api/ask/status',
   STREAM: '/stream',
 } as const;
