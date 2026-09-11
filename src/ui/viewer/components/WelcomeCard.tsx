@@ -6,7 +6,6 @@ interface WelcomeCardProps {
 
 const STORAGE_KEY = 'claude-mem-welcome-dismissed-v3';
 const EXPLAINER_URL = '/api/onboarding/explainer';
-const DOCS_URL = 'https://docs.claude-mem.ai';
 
 export function getStoredWelcomeDismissed(): boolean {
   try {
@@ -206,10 +205,6 @@ export function WelcomeCard({ onDismiss }: WelcomeCardProps) {
         <footer className="welcome-modal-footer">
           <a href={EXPLAINER_URL} target="_blank" rel="noopener noreferrer">
             How it works
-          </a>
-          <span className="welcome-modal-footer-sep">{'·'}</span>
-          <a href={DOCS_URL} target="_blank" rel="noopener noreferrer">
-            Read the docs
           </a>
         </footer>
       </article>
