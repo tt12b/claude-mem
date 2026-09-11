@@ -428,35 +428,6 @@
       box-shadow: 0 2px 8px rgba(9, 105, 218, 0.25);
     }
 
-    /* GitHub Stars Button - Similar to Community Button */
-
-
-
-    /* Stars count animation */
-    .stars-count {
-      animation: countUp 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-      display: inline-block;
-    }
-
-    .stars-loading {
-      opacity: 0.5;
-      animation: pulse 1.5s ease-in-out infinite;
-    }
-
-    @keyframes countUp {
-      from {
-        opacity: 0;
-        transform: translateY(8px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    /* cmem Pro trial CTA — lives in .header-main so the responsive rules that
-       hide
-
     .settings-icon,
     .theme-toggle-btn svg {
       width: 18px;
@@ -780,8 +751,6 @@
     }
 
     /* Stack single column on narrow screens (removed - no longer using card-files) */
-    @media (max-width: 600px) {}
-
     /* Project badge styling */
     .card-project {
       color: var(--color-text-muted);
@@ -2136,29 +2105,15 @@
         max-width: 160px;
       }
 
-      /* Hide icon links (docs, github, twitter) on tablet */
-
-      /* Keep the trial CTA, but drop to the shorter label */
-
-
       /* Feed adjustments */
       .feed {
         padding: 20px 16px;
-      }
-
-      .feed-content {
       }
 
       /* Card adjustments */
       .card {
         padding: 20px;
       }
-    }
-
-    /* Mobile & Small Tablet - 600px and below */
-    @media (max-width: 600px) {
-
-      /* Hide GitHub stars button on mobile */
     }
 
     /* Mobile Responsive Styles - 480px and below */
@@ -2211,19 +2166,6 @@
         height: 32px;
         font-size: 12px;
       }
-
-      /* Hide icon links on mobile */
-
-      /* The CTA stays — it is the whole point of the bar for free users.
-         Shortest label, sized to match the other mobile controls. */
-
-
-
-      .settings-btn,
-      .theme-toggle-btn,
-
-      .settings-icon,
-      .theme-toggle-btn svg,
 
       /* Feed adjustments */
       .feed {
