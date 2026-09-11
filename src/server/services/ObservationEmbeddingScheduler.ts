@@ -46,6 +46,8 @@ export interface ObservationEmbeddingSchedulerOptions {
 export interface EmbeddingTickResult {
   considered: number;
   embedded: number;
+  /** True when the tick could not run at all — pgvector is not present. */
+  skipped?: boolean;
 }
 
 /**
@@ -107,6 +109,13 @@ export class ObservationEmbeddingScheduler {
       const result = await this.tick();
       if (result.embedded > 0) {
         logger.info('SYSTEM', 'embedded observations', result);
+      } else if (result.considered > 0) {
+        // Rows were waiting and none got a vector. Silence here reads the
+        // same as "nothing to do", which is what made a stalled backfill
+        // take a log dig to diagnose.
+        logger.warn('SYSTEM', 'rows were pending but none were embedded', result);
+      } else if (result.skipped) {
+        logger.warn('SYSTEM', 'embedding tick skipped; pgvector not available', {});
       }
     } catch (error) {
       // A provider outage or a spent quota is expected, not exceptional:
@@ -119,9 +128,26 @@ export class ObservationEmbeddingScheduler {
     }
   }
 
+  /**
+   * Run a sweep now, outside the timer.
+   *
+   * The interval is five minutes, which is a long time to sit looking at a
+   * backlog wondering whether anything is happening — and after a provider
+   * outage the operator knows the fix landed before the schedule does.
+   */
+  async runNow(): Promise<EmbeddingTickResult> {
+    if (this.running) return { considered: 0, embedded: 0 };
+    this.running = true;
+    try {
+      return await this.tick();
+    } finally {
+      this.running = false;
+    }
+  }
+
   /** One pass. Public so a test can drive it without waiting for the timer. */
   async tick(): Promise<EmbeddingTickResult> {
-    if (vectorSupport() !== true) return { considered: 0, embedded: 0 };
+    if (vectorSupport() !== true) return { considered: 0, embedded: 0, skipped: true };
 
     const repo = new PostgresObservationRepository(this.options.pool);
     const pending = await repo.listMissingEmbeddings({ limit: MAX_ROWS_PER_TICK });

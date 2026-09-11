@@ -223,7 +223,10 @@ export class ServerService {
     // Dashboard data API. Registered BEFORE the viewer's static handler so
     // the /api/* and /stream routes resolve before express.static gets a
     // chance to look for files with those names.
-    server.registerRoutes(new ServerDashboardApiRoutes({ pool: this.graph.postgres.pool }));
+    server.registerRoutes(new ServerDashboardApiRoutes({
+      pool: this.graph.postgres.pool,
+      resolveEmbeddingScheduler: () => this.embeddingScheduler,
+    }));
 
     server.registerRoutes(new ServerViewerRoutes());
 

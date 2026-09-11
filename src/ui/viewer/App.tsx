@@ -3,7 +3,7 @@ import { Header } from './components/Header';
 import { Feed } from './components/Feed';
 import { UsagePanel } from './components/UsagePanel';
 import { ModelPanel } from './components/ModelPanel';
-import { AskChat } from './components/AskChat';
+import { AskChat, readAskOpen, writeAskOpen } from './components/AskChat';
 import { ContextSettingsModal } from './components/ContextSettingsModal';
 import { LogsDrawer } from './components/LogsModal';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
@@ -106,8 +106,21 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFilter]);
 
+  // Owned here, not inside AskChat: the content shift and the sidebar have
+  // to appear in the same render. Toggling a body class from an effect left
+  // the class on with the padding unapplied after a reload, and the fixed
+  // sidebar then sat on top of the panels.
+  const [askOpen, setAskOpen] = useState<boolean>(readAskOpen);
+  const toggleAsk = useCallback(() => {
+    setAskOpen(prev => {
+      writeAskOpen(!prev);
+      return !prev;
+    });
+  }, []);
+
   return (
     <>
+      <div className={`app-shell${askOpen ? ' app-shell-pushed' : ''}`}>
       <Header
         projects={projects}
         currentFilter={currentFilter}
@@ -136,8 +149,9 @@ export function App() {
         isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading || pagination.messages.isLoading}
         hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore || pagination.messages.hasMore}
       />
+      </div>
 
-      <AskChat project={currentFilter || null} />
+      <AskChat project={currentFilter || null} open={askOpen} onToggle={toggleAsk} />
 
       {!welcomeDismissed && (
         <WelcomeCard onDismiss={() => setWelcomeDismissed(true)} />

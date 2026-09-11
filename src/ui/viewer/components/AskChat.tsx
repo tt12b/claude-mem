@@ -54,7 +54,7 @@ interface Turn {
   failed?: boolean;
 }
 
-function readOpen(): boolean {
+export function readAskOpen(): boolean {
   try {
     return localStorage.getItem(OPEN_KEY) === '1';
   } catch {
@@ -62,7 +62,7 @@ function readOpen(): boolean {
   }
 }
 
-function writeOpen(value: boolean): void {
+export function writeAskOpen(value: boolean): void {
   try {
     localStorage.setItem(OPEN_KEY, value ? '1' : '0');
   } catch {
@@ -114,10 +114,12 @@ function writeTurns(turns: Turn[]): void {
 interface AskChatProps {
   /** Project filter in force, so answers match what the feed shows. */
   project: string | null;
+  /** Owned by the parent: the content shift has to render with the panel. */
+  open: boolean;
+  onToggle: () => void;
 }
 
-export function AskChat({ project }: AskChatProps) {
-  const [open, setOpen] = useState<boolean>(readOpen);
+export function AskChat({ project, open, onToggle }: AskChatProps) {
   const [status, setStatus] = useState<AskStatus | null>(null);
   const [turns, setTurns] = useState<Turn[]>(readTurns);
   const [question, setQuestion] = useState('');
@@ -150,20 +152,6 @@ export function AskChat({ project }: AskChatProps) {
   useEffect(() => {
     writeTurns(turns);
   }, [turns]);
-
-  // While the chat is docked, push the dashboard left instead of covering
-  // it — the answer and the feed it cites get read side by side.
-  useEffect(() => {
-    document.body.classList.toggle('ask-open', open);
-    return () => document.body.classList.remove('ask-open');
-  }, [open]);
-
-  const toggle = useCallback(() => {
-    setOpen(prev => {
-      writeOpen(!prev);
-      return !prev;
-    });
-  }, []);
 
   const submit = useCallback(async () => {
     const trimmed = question.trim();
@@ -213,7 +201,7 @@ export function AskChat({ project }: AskChatProps) {
 
   if (!open) {
     return (
-      <button type="button" className="ask-launcher" onClick={toggle} title="기록에 물어보기">
+      <button type="button" className="ask-launcher" onClick={onToggle} title="기록에 물어보기">
         💬 물어보기
       </button>
     );
@@ -232,7 +220,7 @@ export function AskChat({ project }: AskChatProps) {
               지우기
             </button>
           )}
-          <button type="button" className="ask-chat-icon" onClick={toggle} title="닫기">✕</button>
+          <button type="button" className="ask-chat-icon" onClick={onToggle} title="닫기">✕</button>
         </div>
       </header>
 

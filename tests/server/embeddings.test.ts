@@ -117,7 +117,9 @@ describe('ObservationEmbeddingScheduler', () => {
 
     const result = await new ObservationEmbeddingScheduler({ pool, provider }).tick();
 
-    expect(result).toEqual({ considered: 0, embedded: 0 });
+    // `skipped` separates "could not run" from "nothing to do" — both used
+    // to be silent, which is what made a stalled backfill hard to spot.
+    expect(result).toEqual({ considered: 0, embedded: 0, skipped: true });
     expect(provider.batches).toHaveLength(0);
     expect(calls).toHaveLength(0);
   });
@@ -145,6 +147,39 @@ describe('ObservationEmbeddingScheduler', () => {
     expect(await new ObservationEmbeddingScheduler({ pool, provider }).tick())
       .toEqual({ considered: 0, embedded: 0 });
     expect(provider.batches).toHaveLength(0);
+  });
+
+  it('runNow sweeps immediately instead of waiting for the interval', async () => {
+    resetVectorSupportCache(true);
+    const provider = new FakeProvider();
+    const { pool } = fakePool([{ id: 'obs-1', content: 'hello' }]);
+
+    const result = await new ObservationEmbeddingScheduler({ pool, provider }).runNow();
+
+    expect(result.embedded).toBe(1);
+    expect(provider.batches).toEqual([['hello']]);
+  });
+
+  it('runNow does nothing while a tick is already in flight', async () => {
+    resetVectorSupportCache(true);
+    let release: () => void = () => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const provider: EmbeddingProvider = {
+      label: 'slow',
+      dimensions: EMBEDDING_DIMENSIONS,
+      async embed(texts) { await gate; return texts.map((_, i) => values(i)); },
+    };
+    const { pool } = fakePool([{ id: 'obs-1', content: 'hello' }]);
+    const scheduler = new ObservationEmbeddingScheduler({ pool, provider });
+
+    // Two overlapping sweeps would embed the same rows twice and spend the
+    // provider budget for nothing.
+    const first = scheduler.runNow();
+    const second = await scheduler.runNow();
+    release();
+    await first;
+
+    expect(second).toEqual({ considered: 0, embedded: 0 });
   });
 
   it('truncates a long observation so the model does not reject the batch', async () => {

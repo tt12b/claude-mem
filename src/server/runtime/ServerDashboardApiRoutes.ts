@@ -136,6 +136,12 @@ function asJsonArrayText(value: unknown): string | null {
 
 export interface ServerDashboardApiRoutesOptions {
   pool: PostgresPool;
+  /**
+   * Resolved at call time, not construction: these routes are registered
+   * before the scheduler exists so that the static viewer handler cannot
+   * shadow them.
+   */
+  resolveEmbeddingScheduler?: () => { runNow(): Promise<{ considered: number; embedded: number }> } | null;
 }
 
 export class ServerDashboardApiRoutes implements RouteHandler {
@@ -156,6 +162,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     app.post('/api/models/active', express.json(), this.wrap(this.handleSelectModel));
     app.post('/api/ask', express.json({ limit: '32kb' }), this.wrap(this.handleAsk));
     app.get('/api/ask/status', this.wrap(this.handleAskStatus));
+    app.post('/api/embeddings/run', this.wrap(this.handleRunEmbeddings));
     app.get('/api/context/preview', this.wrap(this.handleContextPreview));
     app.get('/api/logs', this.wrap(this.handleLogs));
     app.get('/stream', this.handleStream.bind(this));
@@ -600,6 +607,32 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       briefingLoaded: askBriefingLoaded(),
       models,
     });
+  }
+
+  /**
+   * Sweep the embedding backlog now instead of waiting for the interval.
+   *
+   * Exists because the backfill is invisible between ticks: after fixing
+   * whatever stalled it, five minutes of an unchanged counter is
+   * indistinguishable from still being broken.
+   */
+  private async handleRunEmbeddings(_req: Request, res: Response): Promise<void> {
+    const scheduler = this.options.resolveEmbeddingScheduler?.() ?? null;
+    if (!scheduler) {
+      res.status(409).json({
+        error: 'EmbeddingsDisabled',
+        message: '임베딩이 꺼져 있거나 pgvector 를 사용할 수 없습니다',
+      });
+      return;
+    }
+    try {
+      const result = await scheduler.runNow();
+      res.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn('SYSTEM', 'manual embedding sweep failed', { error: message });
+      res.status(502).json({ error: 'EmbeddingRunFailed', message });
+    }
   }
 
   /**

@@ -160,7 +160,7 @@ export function ModelPanel() {
         ))}
       </ul>
 
-      <EmbeddingRow embeddings={report.embeddings} />
+      <EmbeddingRow embeddings={report.embeddings} onRan={() => void load()} />
 
       <p className="model-note">
         <strong>초록</strong>은 지금 쓸 수 있는 모델, <strong>회색</strong>은 한도가
@@ -184,7 +184,34 @@ export function ModelPanel() {
  * the model rows answer — is a provider still saying yes — and because a
  * second panel is what the operator already asked to stop having.
  */
-function EmbeddingRow({ embeddings }: { embeddings: ModelReport['embeddings'] }) {
+function EmbeddingRow({
+  embeddings,
+  onRan,
+}: {
+  embeddings: ModelReport['embeddings'];
+  onRan: () => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The interval is five minutes. After fixing whatever stalled the
+  // backfill, that is a long time to watch an unchanged counter and wonder
+  // whether the fix took.
+  const runNow = useCallback(async () => {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await fetch(API_ENDPOINTS.EMBEDDINGS_RUN, { method: 'POST' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body?.message ?? response.statusText);
+      onRan();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(false);
+    }
+  }, [onRan]);
+
   if (!embeddings) return null;
 
   if (!embeddings.enabled) {
@@ -212,10 +239,20 @@ function EmbeddingRow({ embeddings }: { embeddings: ModelReport['embeddings'] })
           <span className="embedding-when">마지막 {sinceLabel(embeddings.lastEmbeddedAtEpoch)}</span>
         )}
         {embeddings.stalled && (
-          <span className="embedding-warn">
-            멈춘 것으로 보입니다 — 로그에서 embedding tick 을 확인하세요
-          </span>
+          <span className="embedding-warn">멈춘 것으로 보입니다</span>
         )}
+        {embeddings.pending > 0 && (
+          <button
+            type="button"
+            className="embedding-run"
+            onClick={() => void runNow()}
+            disabled={running}
+            title="다음 주기를 기다리지 않고 지금 임베딩"
+          >
+            {running ? '처리 중…' : '지금 처리'}
+          </button>
+        )}
+        {error && <span className="embedding-warn">실패: {error}</span>}
       </span>
     </div>
   );

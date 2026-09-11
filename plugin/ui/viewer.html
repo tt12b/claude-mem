@@ -1388,17 +1388,20 @@
 
     /* The chat is fixed, so the dashboard has to yield the width itself or
        the two overlap. Keep this in step with .ask-chat's width. */
-    #root {
+    .app-shell {
       padding-right: 0;
       transition: padding-right 160ms ease;
     }
 
-    body.ask-open #root {
+    /* The shift rides on a class React renders, not a body class set from
+       an effect: after a reload the class was present while the padding was
+       not, and the fixed sidebar covered the panels. */
+    .app-shell-pushed {
       padding-right: 400px;
     }
 
     @media (prefers-reduced-motion: reduce) {
-      #root {
+      .app-shell {
         transition: none;
       }
     }
@@ -1598,7 +1601,7 @@
       }
 
       /* Full width leaves nothing to push the dashboard into. */
-      body.ask-open #root {
+      .app-shell-pushed {
         padding-right: 0;
       }
     }
