@@ -405,7 +405,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     // could never agree.
     const dayStart = quotaDayStart();
     const embeddings = await this.embeddingStatus();
-    const [calls, tokens, askCalls, active, limits] = await Promise.all([
+    const [calls, tokens, askCalls, active, limits, askRefusals] = await Promise.all([
       this.options.pool.query<{ model: string | null; event_type: string; count: string }>(
         `SELECT details->>'model' AS model, event_type, count(*)::text AS count
            FROM observation_generation_job_events
@@ -424,11 +424,13 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       // draw down the same daily allowance. They leave no generation-job
       // row, so without this the gauge would only ever count summarisation
       // and overstate what is left.
-      this.options.pool.query<{ model: string | null; count: string }>(
-        `SELECT metadata->>'model' AS model, count(*)::text AS count
+      this.options.pool.query<{ model: string | null; outcome: string | null; count: string }>(
+        `SELECT metadata->>'model' AS model,
+                COALESCE(metadata->>'outcome', 'succeeded') AS outcome,
+                count(*)::text AS count
            FROM usage_events
           WHERE kind = 'request' AND metadata->>'source' = 'ask' AND created_at >= $1
-          GROUP BY 1`,
+          GROUP BY 1, 2`,
         [dayStart],
       ),
       this.options.pool.query<{ model: string | null; created_at: Date }>(
@@ -450,6 +452,21 @@ export class ServerDashboardApiRoutes implements RouteHandler {
           LIMIT 200`,
         [],
       ),
+      // The same refusal, seen from the ask path. Summarisation is not the
+      // only thing that spends the allowance, so it cannot be the only
+      // thing that reports a model as spent: a model that refused every
+      // question stayed green because no generation job had failed on it.
+      this.options.pool.query<{ model: string | null; reason: string | null; created_at: Date }>(
+        `SELECT metadata->>'model' AS model, metadata->>'reason' AS reason, created_at
+           FROM usage_events
+          WHERE kind = 'request'
+            AND metadata->>'source' = 'ask'
+            AND metadata->>'outcome' = 'failed'
+            AND metadata->>'reason' LIKE '%quota exhausted%'
+          ORDER BY created_at DESC
+          LIMIT 200`,
+        [],
+      ),
     ]);
 
     const callsByModel = new Map<string, { succeeded: number; failed: number }>();
@@ -460,12 +477,15 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       else entry.failed += Number(row.count);
       callsByModel.set(key, entry);
     }
-    // Only successful asks are recorded, and a success draws down the
-    // allowance exactly like a completed generation does.
+    // A successful ask draws down the allowance exactly like a completed
+    // generation does. A refused one does not, but it still has to show:
+    // the panel used to display an untouched allowance for a model that was
+    // refusing every question.
     for (const row of askCalls.rows) {
       const key = row.model ?? 'unknown';
       const entry = callsByModel.get(key) ?? { succeeded: 0, failed: 0 };
-      entry.succeeded += Number(row.count);
+      if (row.outcome === 'failed') entry.failed += Number(row.count);
+      else entry.succeeded += Number(row.count);
       callsByModel.set(key, entry);
     }
 
@@ -489,6 +509,18 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       const limit = /limit=([0-9]+)/.exec(text)?.[1];
       if (limit && !measuredLimits.has(model)) measuredLimits.set(model, Number(limit));
       if (!refusedAt.has(model)) refusedAt.set(model, new Date(row.updated_at).getTime());
+    }
+
+    // Ask refusals, merged in newest-first like the block above. A model is
+    // spent whichever path found it spent, so the later of the two wins.
+    for (const row of askRefusals.rows) {
+      const model = row.model;
+      if (!model) continue;
+      const at = new Date(row.created_at).getTime();
+      const known = refusedAt.get(model);
+      if (known === undefined || at > known) refusedAt.set(model, at);
+      const limit = /limit=([0-9]+)/.exec(row.reason ?? '')?.[1];
+      if (limit && !measuredLimits.has(model)) measuredLimits.set(model, Number(limit));
     }
 
     // Most recent success per model. Google does not publish when a daily

@@ -207,7 +207,7 @@ export class AskService {
     // greet, explain itself, or say the lookup came up empty — whichever the
     // message actually calls for. One request is worth not feeling dead.
     const prompt = this.buildPrompt(question, rows, history, notes);
-    const raw = await this.generate(prompt);
+    const raw = await this.generate(prompt, rows[0]);
     const { text: answer, remembered } = await this.captureNotes(raw.answer, notesRepo);
     const { model, tokensUsed } = raw;
     // Attribute the spend to the team whose records were read. Without this
@@ -320,9 +320,11 @@ export class AskService {
   }
 
   /**
-   * Ask each candidate model in turn, moving on only when one is out of
-   * quota. Any other failure is the answer failing, not the model being
-   * spent, so it stops there rather than burning the rest of the list.
+   * Ask each candidate model in turn, moving on when the failure is one
+   * another model could survive — out of quota, rate limited, or the
+   * upstream being briefly unavailable. Anything else is the answer
+   * failing, not the model being spent, so it stops there rather than
+   * burning the rest of the list. Every attempt is metered either way.
    */
   /**
    * Record the call so the model panel counts it.
@@ -335,6 +337,14 @@ export class AskService {
     row: SourceRow | undefined;
     model: string;
     tokensUsed: number | null;
+    /**
+     * A refused attempt is still evidence about the model. Summarisation
+     * records one in `last_error.reason`, which is how the panel learns a
+     * model is spent; an ask recorded nothing, so a model that refused
+     * every question stayed green with its allowance apparently untouched.
+     */
+    outcome?: 'succeeded' | 'failed';
+    reason?: string;
   }): Promise<void> {
     // A question that retrieved nothing still spent a request, so it still
     // has to be counted; with no row to attribute it to, any team will do on
@@ -343,7 +353,15 @@ export class AskService {
     if (!teamId) return;
     try {
       const repo = new PostgresUsageRepository(this.options.pool);
-      const metadata = { model: input.model, source: 'ask' };
+      const metadata: Record<string, string> = {
+        model: input.model,
+        source: 'ask',
+        outcome: input.outcome ?? 'succeeded',
+      };
+      // The classified message only ("gemini quota exhausted (status 429)
+      // [limit=20 model=...]"), never the provider's raw body: it can echo
+      // the prompt back, and /api/* has no authentication.
+      if (input.reason !== undefined) metadata.reason = input.reason;
       await repo.record({
         teamId,
         projectId: input.row?.project_id ?? null,
@@ -432,7 +450,10 @@ export class AskService {
     return [preferred, ...models.filter(model => model !== preferred)];
   }
 
-  private async generate(prompt: string): Promise<{ answer: string; model: string; tokensUsed: number | null }> {
+  private async generate(
+    prompt: string,
+    row: SourceRow | undefined,
+  ): Promise<{ answer: string; model: string; tokensUsed: number | null }> {
     const apiKey = askApiKey();
     if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
 
@@ -447,8 +468,19 @@ export class AskService {
       } catch (error) {
         lastError = error;
         const kind = (error as { kind?: string })?.kind;
+        const reason = error instanceof Error ? error.message : String(error);
+        // Record the refusal before deciding what to do with it: a failure
+        // that stops the chain is exactly the one worth having counted.
+        await this.meter({ row, model, tokensUsed: null, outcome: 'failed', reason });
         if (!kind || !FAILOVER_KINDS.has(kind)) throw error;
-        logger.info('SYSTEM', 'ask: model out of quota, trying the next', { model });
+        // "out of quota" was the only thing this ever said, so a 429 and a
+        // 503 read identically in the log and the cause had to be guessed.
+        logger.info('SYSTEM', 'ask: model failed, trying the next', {
+          model,
+          kind,
+          category: (error as { category?: string })?.category ?? null,
+          reason,
+        });
       }
     }
     throw lastError ?? new Error('no model answered');

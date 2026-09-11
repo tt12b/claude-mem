@@ -252,6 +252,59 @@ describe('AskService metering', () => {
     expect(inserts[0].values?.[1]).toBe('team-1');
   });
 
+  it('records a refused attempt too, so a spent model stops looking untouched', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'down,up';
+    resetVectorSupportCache(false);
+    const { calls, pool: p } = pool([row()]);
+
+    await new AskService({
+      pool: p,
+      fetchImpl: (async (url: string) => {
+        const model = url.split('/models/')[1].split(':')[0];
+        if (model === 'down') {
+          return new Response(JSON.stringify({ error: { message: 'quota' } }), { status: 429 });
+        }
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '답' }] } }] }));
+      }) as never,
+    }).ask({ question: '질문' });
+
+    const metadata = calls
+      .filter(call => call.text.includes('INSERT INTO usage_events'))
+      .map(call => JSON.parse(String(call.values?.[5])) as Record<string, string>);
+
+    // The refusal is the only trace an ask leaves of a model being spent.
+    // Without it the panel shows the whole allowance still available for a
+    // model that is turning every question away.
+    const refused = metadata.find(entry => entry.outcome === 'failed');
+    expect(refused?.model).toBe('down');
+    expect(refused?.reason).toContain('429');
+    expect(metadata.some(entry => entry.model === 'up' && entry.outcome === 'succeeded')).toBe(true);
+  });
+
+  it('keeps the provider\'s raw body out of the recorded reason', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'down';
+    resetVectorSupportCache(false);
+    const { calls, pool: p } = pool([row()]);
+
+    // /api/* has no authentication and the body can echo the prompt back,
+    // so only the classified message may be stored.
+    const body = 'RAW_PROVIDER_BODY with credential sk-secret';
+    await new AskService({
+      pool: p,
+      fetchImpl: (async () => new Response(body, { status: 503 })) as never,
+    }).ask({ question: '질문' }).catch(() => {});
+
+    const recorded = calls
+      .filter(call => call.text.includes('INSERT INTO usage_events'))
+      .map(call => String(call.values?.[5]))
+      .join(' ');
+    expect(recorded).not.toContain('sk-secret');
+    expect(recorded).not.toContain('RAW_PROVIDER_BODY');
+    expect(recorded).toContain('503');
+  });
+
   it('skips the token row when the provider reported no count', async () => {
     process.env.GEMINI_API_KEY = 'k';
     process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
