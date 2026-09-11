@@ -438,3 +438,80 @@ describe('AskService remembering', () => {
     expect(calls.some(c => c.text.includes('INSERT INTO ask_notes'))).toBe(false);
   });
 });
+
+describe('AskService model preference', () => {
+  function prefPool(preferred: string | null) {
+    return {
+      async query(text: string) {
+        if (text.includes('FROM server_settings')) {
+          return { command: 'SELECT', rowCount: preferred ? 1 : 0, oid: 0, fields: [],
+                   rows: preferred ? [{ value: preferred }] : [] };
+        }
+        if (text.includes('FROM observations o')) {
+          return { command: 'SELECT', rowCount: 1, oid: 0, fields: [], rows: [row()] };
+        }
+        return { command: 'SELECT', rowCount: 0, oid: 0, fields: [], rows: [] };
+      },
+    } as never;
+  }
+
+  it('tries the model picked in the dashboard first', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'first,second,chosen';
+    resetVectorSupportCache(false);
+    const tried: string[] = [];
+
+    // Summarising honoured this setting while asking ignored it, so picking
+    // a model changed the summaries but not the answers.
+    const result = await new AskService({
+      pool: prefPool('chosen'),
+      fetchImpl: (async (url: string) => {
+        tried.push(url.split('/models/')[1].split(':')[0]);
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '답' }] } }] }));
+      }) as never,
+    }).ask({ question: '질문' });
+
+    expect(tried[0]).toBe('chosen');
+    expect(result.model).toBe('chosen');
+  });
+
+  it('keeps the rest of the chain behind the pick', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'a,b,chosen';
+    resetVectorSupportCache(false);
+    const tried: string[] = [];
+
+    const result = await new AskService({
+      pool: prefPool('chosen'),
+      fetchImpl: (async (url: string) => {
+        const model = url.split('/models/')[1].split(':')[0];
+        tried.push(model);
+        if (model === 'chosen') {
+          return new Response(JSON.stringify({ error: { message: 'quota' } }), { status: 429 });
+        }
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '답' }] } }] }));
+      }) as never,
+    }).ask({ question: '질문' });
+
+    // A spent favourite must fall through, not stall.
+    expect(tried).toEqual(['chosen', 'a']);
+    expect(result.model).toBe('a');
+  });
+
+  it('falls back to the configured order when nothing is picked', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    process.env.CLAUDE_MEM_SERVER_MODEL = 'first,second';
+    resetVectorSupportCache(false);
+    const tried: string[] = [];
+
+    await new AskService({
+      pool: prefPool(null),
+      fetchImpl: (async (url: string) => {
+        tried.push(url.split('/models/')[1].split(':')[0]);
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }));
+      }) as never,
+    }).ask({ question: '질문' });
+
+    expect(tried[0]).toBe('first');
+  });
+});

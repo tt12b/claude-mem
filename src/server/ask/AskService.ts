@@ -28,6 +28,7 @@ import { buildSearchTerms } from '../../storage/postgres/search-terms.js';
 import { EMBEDDING_COLUMN, toVectorLiteral, vectorSupport } from '../../storage/postgres/vector-support.js';
 import { PostgresUsageRepository } from '../../storage/postgres/usage.js';
 import { PostgresAskNotesRepository, type AskNote } from '../../storage/postgres/ask-notes.js';
+import { PostgresServerSettingsRepository, PREFERRED_MODEL_KEY } from '../../storage/postgres/server-settings.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -392,6 +393,32 @@ export class AskService {
     }
   }
 
+  /**
+   * The configured order with the operator's pick moved to the front.
+   *
+   * Summarisation already honours this setting; asking did not, so choosing
+   * a model in the dashboard changed which model wrote the summaries while
+   * answers kept coming from whatever sat first in the env list. The pick
+   * only reorders — the rest of the chain stays behind it, so a spent
+   * favourite still falls through instead of stalling.
+   */
+  private async orderedModels(models: string[]): Promise<string[]> {
+    let preferred: string | null = null;
+    try {
+      preferred = await new PostgresServerSettingsRepository(this.options.pool)
+        .get<string>(PREFERRED_MODEL_KEY);
+    } catch (error) {
+      logger.debug('SYSTEM', 'preferred model lookup failed; using configured order', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return models;
+    }
+    if (!preferred) return models;
+    const index = models.indexOf(preferred);
+    if (index <= 0) return models;
+    return [preferred, ...models.filter(model => model !== preferred)];
+  }
+
   private async generate(prompt: string): Promise<{ answer: string; model: string; tokensUsed: number | null }> {
     const apiKey = askApiKey();
     if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
@@ -400,7 +427,7 @@ export class AskService {
     if (models.length === 0) throw new Error('CLAUDE_MEM_SERVER_MODEL lists no models');
 
     let lastError: unknown;
-    for (const model of models) {
+    for (const model of await this.orderedModels(models)) {
       try {
         const { text, tokensUsed } = await this.callGemini(apiKey, model, prompt);
         return { answer: text, model, tokensUsed };
