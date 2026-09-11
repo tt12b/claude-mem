@@ -32,21 +32,42 @@ interface Turn {
   items: FeedItem[];
 }
 
-function groupIntoTurns(items: FeedItem[]): Turn[] {
+/**
+ * Which conversation an item belongs to.
+ *
+ * Grouping used to follow time alone, so a reply joined whichever question
+ * came last — and with two sessions running at once their turns interleaved:
+ * a question asked in one project appeared answered by the other. Falling
+ * back to the project label keeps older rows, written before the server sent
+ * a session id, from all collapsing into one thread.
+ */
+export function threadOf(item: FeedItem): string {
+  const session = (item as { turn_session_id?: string }).turn_session_id;
+  if (session) return `s:${session}`;
+  return `p:${item.project ?? 'unknown'}`;
+}
+
+export function groupIntoTurns(items: FeedItem[]): Turn[] {
   // Ascending, so a prompt is seen before the replies that belong to it.
   const ascending = [...items].sort((a, b) => a.created_at_epoch - b.created_at_epoch);
 
   const turns: Turn[] = [];
-  let current: Turn | null = null;
+  // One open turn per conversation, so concurrent sessions do not capture
+  // each other's replies.
+  const open = new Map<string, Turn>();
 
   for (const item of ascending) {
+    const thread = threadOf(item);
     if (item.itemType === 'prompt') {
-      current = { key: `turn-${item.id}`, prompt: item, items: [] };
-      turns.push(current);
+      const turn: Turn = { key: `turn-${item.id}`, prompt: item, items: [] };
+      open.set(thread, turn);
+      turns.push(turn);
       continue;
     }
+    let current = open.get(thread);
     if (!current) {
-      current = { key: 'turn-leading', prompt: null, items: [] };
+      current = { key: `turn-leading-${thread}`, prompt: null, items: [] };
+      open.set(thread, current);
       turns.push(current);
     }
     current.items.push(item);

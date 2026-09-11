@@ -1,6 +1,8 @@
 export interface Observation {
   id: number;
   memory_session_id: string;
+  /** Server session this item belongs to; the feed groups turns by it. */
+  turn_session_id?: string;
   project: string;
   merged_into_project?: string | null;
   platform_source: string;
@@ -21,6 +23,8 @@ export interface Observation {
 export interface Summary {
   id: number;
   session_id: string;
+  /** Server session this item belongs to; the feed groups turns by it. */
+  turn_session_id?: string;
   project: string;
   platform_source: string;
   request?: string;
@@ -34,6 +38,8 @@ export interface Summary {
 export interface UserPrompt {
   id: number;
   content_session_id: string;
+  /** Server session this item belongs to; the feed groups turns by it. */
+  turn_session_id?: string;
   project: string;
   platform_source: string;
   prompt_number: number;

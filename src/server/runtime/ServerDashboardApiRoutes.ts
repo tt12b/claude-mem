@@ -876,6 +876,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       `
         SELECT e.id, e.payload, e.occurred_at, e.platform_source,
                s.content_session_id,
+               e.server_session_id,
                ${PROJECT_LABEL_SQL} AS project_label
         FROM agent_events e
         LEFT JOIN server_sessions s ON s.id = e.server_session_id
@@ -912,6 +913,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     return {
       id: row.id,
       memory_session_id: row.server_session_id ?? '',
+      turn_session_id: (row.server_session_id as string) ?? '',
       project: row.project_label ?? 'unknown',
       platform_source: row.platform_source ?? 'claude-code',
       type: row.kind ?? 'observation',
@@ -934,6 +936,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     return {
       id: row.id,
       session_id: row.server_session_id ?? '',
+      turn_session_id: (row.server_session_id as string) ?? '',
       project: row.project_label ?? 'unknown',
       platform_source: row.platform_source ?? 'claude-code',
       request: asText(metadata.request) ?? undefined,
@@ -950,6 +953,10 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     return {
       id: row.id,
       content_session_id: row.content_session_id ?? '',
+      // Grouping key shared with observations and summaries. The viewer
+      // used to pair a question with whatever reply came next in time, so
+      // two sessions running at once had their turns interleaved.
+      turn_session_id: (row.server_session_id as string) ?? '',
       project: row.project_label ?? 'unknown',
       platform_source: row.platform_source ?? 'claude-code',
       prompt_number: 0,
