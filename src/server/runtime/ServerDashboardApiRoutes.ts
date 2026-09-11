@@ -244,11 +244,19 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     const [calls, tokens, jobs, failures] = await Promise.all([
-      this.options.pool.query<{ event_type: string; count: string }>(
-        `SELECT event_type, count(*)::text AS count
-           FROM observation_generation_job_events
-          WHERE event_type IN ('completed', 'failed') AND created_at >= $1
-          GROUP BY event_type`,
+      // Attempts, split by what became of the job they belong to. Counting
+      // failed *attempts* made a retried-and-recovered job look lost: after
+      // the retry fix, 140 of 142 "failures" belonged to jobs that went on
+      // to complete, while the failure-reason list (which reads job status)
+      // showed one. Same source of truth for both now.
+      this.options.pool.query<{ event_type: string; job_status: string | null; count: string }>(
+        `SELECT e.event_type,
+                CASE WHEN e.event_type = 'failed' THEN j.status END AS job_status,
+                count(*)::text AS count
+           FROM observation_generation_job_events e
+           JOIN observation_generation_jobs j ON j.id = e.generation_job_id
+          WHERE e.event_type IN ('completed', 'failed') AND e.created_at >= $1
+          GROUP BY 1, 2`,
         [since],
       ),
       this.options.pool.query<{ provider: string | null; model: string | null; total: string }>(
@@ -277,9 +285,18 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       ),
     ]);
 
-    const callCounts = Object.fromEntries(calls.rows.map(r => [r.event_type, Number(r.count)]));
-    const succeeded = callCounts.completed ?? 0;
-    const failed = callCounts.failed ?? 0;
+    let succeeded = 0;
+    let failed = 0;
+    let retried = 0;
+    for (const row of calls.rows) {
+      const count = Number(row.count);
+      if (row.event_type === 'completed') succeeded += count;
+      // A failed attempt on a job that is no longer failed cost a request
+      // but lost nothing — the retry got it. Only a job still sitting in
+      // `failed` represents a summary that was actually never written.
+      else if (row.job_status === 'failed') failed += count;
+      else retried += count;
+    }
 
     res.json({
       windowDays: days,
@@ -287,7 +304,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       provider: process.env.CLAUDE_MEM_SERVER_PROVIDER ?? null,
       // One row per attempt, so this is the real request count against the
       // provider's rate limit — not the number of observations produced.
-      calls: { total: succeeded + failed, succeeded, failed },
+      calls: { total: succeeded + failed + retried, succeeded, failed, retried },
       tokens: tokens.rows.map(r => ({
         provider: r.provider,
         model: r.model,

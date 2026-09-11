@@ -69,7 +69,8 @@ export function UsagePanel() {
       // the per-model breakdown and the failure reasons wait for a click.
       summary={`시도 ${usage.calls.total.toLocaleString()}`
         + ` · 성공 ${usage.calls.succeeded.toLocaleString()}`
-        + ` · 실패 ${usage.calls.failed.toLocaleString()}`}
+        + ` · 실패 ${usage.calls.failed.toLocaleString()}`
+        + (usage.calls.retried > 0 ? ` · 재시도 ${usage.calls.retried.toLocaleString()}` : '')}
     >
     <div className="usage-panel">
       <div className="usage-header">
@@ -82,7 +83,13 @@ export function UsagePanel() {
       <div className="usage-stats">
         <Stat label="요약 시도" value={usage.calls.total} />
         <Stat label="요약 성공" value={usage.calls.succeeded} />
+        {/* Only jobs that stayed failed. An attempt that failed and then
+            succeeded on retry is counted under 재시도, not here — it cost a
+            request but no summary was lost. */}
         <Stat label="요약 실패" value={usage.calls.failed} tone={usage.calls.failed > 0 ? 'warn' : undefined} />
+        {usage.calls.retried > 0 && (
+          <Stat label="재시도 후 성공" value={usage.calls.retried} />
+        )}
         <Stat label="사용 토큰" value={totalTokens} />
       </div>
 
@@ -96,7 +103,12 @@ export function UsagePanel() {
           {/* A breakdown of the failure count above, so a single reason
               legitimately equals the total — label it to avoid reading as a
               second, unrelated number. */}
-          <span className="usage-reasons-title">실패 {usage.calls.failed}건의 사유</span>
+          {/* Derived from the list itself. The count above is attempts and a
+              job can fail several times, so borrowing that number here made
+              the heading disagree with the rows under it. */}
+          <span className="usage-reasons-title">
+            실패한 요약 {usage.failureReasons.reduce((sum, r) => sum + r.count, 0)}건의 사유
+          </span>
           <ul className="usage-reasons">
             {usage.failureReasons.map(reason => (
               <li key={reason.classification}>

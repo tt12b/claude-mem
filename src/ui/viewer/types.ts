@@ -118,7 +118,14 @@ export interface UsageReport {
   windowDays: number;
   since: string;
   provider: string | null;
-  calls: { total: number; succeeded: number; failed: number };
+  calls: {
+    total: number;
+    succeeded: number;
+    /** Attempts on jobs still terminally failed — summaries never written. */
+    failed: number;
+    /** Attempts that failed but whose job recovered on a retry. */
+    retried: number;
+  };
   tokens: Array<{ provider: string | null; model: string | null; total: number }>;
   jobs: Record<string, number>;
   failureReasons: Array<{ classification: string; count: number }>;
