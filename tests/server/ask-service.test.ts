@@ -63,21 +63,25 @@ describe('AskService', () => {
     expect(result.empty).toBe(false);
   });
 
-  it('says so without calling the provider when nothing matches', async () => {
+  it('still answers when retrieval finds nothing, and says there were no records', async () => {
     process.env.GEMINI_API_KEY = 'k';
     process.env.CLAUDE_MEM_SERVER_MODEL = 'model-a';
     resetVectorSupportCache(false);
-    let calls = 0;
+    let prompt = '';
     const { pool: p } = pool([]);
 
+    // Short-circuiting here saved a call but made a chat window look broken:
+    // "안녕" matches no record, and got "관련된 기록을 찾지 못했습니다".
     const result = await new AskService({
       pool: p,
-      fetchImpl: (async () => { calls++; return new Response('{}'); }) as never,
-    }).ask({ question: '존재하지 않는 주제' });
+      fetchImpl: (async (_u: string, init: RequestInit) => {
+        prompt = JSON.parse(String(init.body)).contents[0].parts[0].text;
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '안녕하세요' }] } }] }));
+      }) as never,
+    }).ask({ question: '안녕' });
 
-    // Spending one of a small daily allowance to say "I found nothing" is
-    // the one call that is always wasted.
-    expect(calls).toBe(0);
+    expect(result.answer).toBe('안녕하세요');
+    expect(prompt).toContain('관련된 기록을 찾지 못했습니다');
     expect(result.empty).toBe(true);
     expect(result.sources).toHaveLength(0);
   });

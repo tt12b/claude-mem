@@ -163,24 +163,19 @@ export class AskService {
       excerpt: row.content.slice(0, 240),
     }));
 
-    if (rows.length === 0) {
-      // No provider call: there is nothing to reason over, and saying so
-      // costs one of a small daily allowance otherwise.
-      return {
-        answer: '관련된 기록을 찾지 못했습니다. 다른 표현으로 물어보시거나, 해당 작업이 기록되기 전일 수 있습니다.',
-        model: '',
-        sources: [],
-        empty: true,
-      };
-    }
-
+    // Retrieval finding nothing used to short-circuit with a canned line, to
+    // save a call. In a chat window that reads as broken: "안녕" matches no
+    // record, so a greeting got answered with "관련된 기록을 찾지 못했습니다".
+    // The model is asked either way and told there were no records, so it can
+    // greet, explain itself, or say the lookup came up empty — whichever the
+    // message actually calls for. One request is worth not feeling dead.
     const prompt = this.buildPrompt(question, rows, history);
     const { answer, model, tokensUsed } = await this.generate(prompt);
     // Attribute the spend to the team whose records were read. Without this
     // the dashboard's "남은 요청" keeps counting down only summarisation
     // while asking quietly draws from the same daily allowance.
     await this.meter({ row: rows[0], model, tokensUsed });
-    return { answer, model, sources, empty: false };
+    return { answer, model, sources, empty: rows.length === 0 };
   }
 
   /**
@@ -249,11 +244,13 @@ export class AskService {
       (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     );
 
-    const records = ordered.map((row, index) => {
+    const records = ordered.length === 0
+      ? '(이 질문과 관련된 기록을 찾지 못했습니다.)'
+      : ordered.map((row, index) => {
       const when = new Date(row.created_at).toISOString().replace('T', ' ').slice(0, 16);
       return `### 기록 ${index + 1} · ${when} · ${row.project_label ?? 'unknown'}\n`
         + row.content.slice(0, MAX_SOURCE_CHARS);
-    }).join('\n\n');
+      }).join('\n\n');
 
     const priorTurns = history.length > 0
       ? ['---', '## 이전 대화', history
@@ -290,21 +287,25 @@ export class AskService {
     model: string;
     tokensUsed: number | null;
   }): Promise<void> {
-    if (!input.row) return;
+    // A question that retrieved nothing still spent a request, so it still
+    // has to be counted; with no row to attribute it to, any team will do on
+    // a single-tenant deployment.
+    const teamId = input.row?.team_id ?? await this.anyTeamId();
+    if (!teamId) return;
     try {
       const repo = new PostgresUsageRepository(this.options.pool);
       const metadata = { model: input.model, source: 'ask' };
       await repo.record({
-        teamId: input.row.team_id,
-        projectId: input.row.project_id,
+        teamId,
+        projectId: input.row?.project_id ?? null,
         kind: 'request',
         quantity: 1,
         metadata,
       });
       if (input.tokensUsed !== null) {
         await repo.record({
-          teamId: input.row.team_id,
-          projectId: input.row.project_id,
+          teamId,
+          projectId: input.row?.project_id ?? null,
           kind: 'tokens',
           quantity: input.tokensUsed,
           metadata,
@@ -314,6 +315,15 @@ export class AskService {
       logger.warn('SYSTEM', 'could not meter an ask call', {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  private async anyTeamId(): Promise<string | null> {
+    try {
+      const result = await this.options.pool.query<{ id: string }>('SELECT id FROM teams LIMIT 1');
+      return result.rows[0]?.id ?? null;
+    } catch {
+      return null;
     }
   }
 

@@ -1228,15 +1228,18 @@
        blue = the operator's pick. A pick that runs out still reads grey,
        because the pick is an intent and the colour reports reality. */
     .model-row-available .model-name,
+    .model-row-available .model-summary-name,
     .model-row-available .model-dot {
       color: var(--color-success, #3fb950);
     }
 
-    .model-row-available .model-name {
+    .model-row-available .model-name,
+    .model-row-available .model-summary-name {
       font-weight: 600;
     }
 
     .model-row-exhausted .model-name,
+    .model-row-exhausted .model-summary-name,
     .model-row-exhausted .model-dot {
       color: var(--color-text-muted);
       font-weight: 400;
@@ -1244,6 +1247,32 @@
 
     .model-row-preferred {
       background: var(--color-bg-elevated, rgba(88, 166, 255, 0.10));
+    }
+
+    /* The folded summary repeats the row's colour so the panel does not have
+       to be opened just to see whether the running model is healthy. */
+    .model-summary {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .model-summary.model-row-preferred {
+      background: transparent;
+    }
+
+    .model-summary.model-row-preferred .model-summary-name {
+      color: var(--color-accent-primary);
+    }
+
+    .model-summary-name {
+      font-family: var(--font-mono, monospace);
+    }
+
+    .model-summary-rest {
+      color: var(--color-text-muted);
+      font-weight: 400;
     }
 
     .model-name {

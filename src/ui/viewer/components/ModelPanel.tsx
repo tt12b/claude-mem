@@ -72,16 +72,30 @@ export function ModelPanel() {
   const current = report.models.find(m => m.active)
     ?? report.models.find(m => m.name === report.preferredModel)
     ?? report.models.find(m => m.status === 'available' && m.configured);
+  // Folded, the model carries the same colour it has in the list — a name
+  // in plain text would make the operator unfold just to learn whether the
+  // thing running right now is healthy.
   const summary = current
-    ? [
-        current.name,
-        `요청 ${current.calls.total.toLocaleString()}`,
-        current.remaining !== null
-          ? `남은 요청 ${current.remaining.toLocaleString()}${current.limit !== null ? `/${current.limit}` : ''}`
-          : '한도 미확인',
-        current.status === 'exhausted' ? '한도 소진' : null,
-        emb?.enabled ? `임베딩 ${emb.embedded}/${emb.total}${emb.stalled ? ' ⚠' : ''}` : null,
-      ].filter(Boolean).join(' · ')
+    ? (
+      <span className={[
+        'model-summary',
+        `model-row-${current.status}`,
+        current.preferred ? 'model-row-preferred' : '',
+      ].filter(Boolean).join(' ')}>
+        <span className="model-dot" aria-hidden="true">●</span>
+        <span className="model-summary-name">{current.name}</span>
+        <span className="model-summary-rest">
+          {[
+            `요청 ${current.calls.total.toLocaleString()}`,
+            current.remaining !== null
+              ? `남은 요청 ${current.remaining.toLocaleString()}${current.limit !== null ? `/${current.limit}` : ''}`
+              : '한도 미확인',
+            current.status === 'exhausted' ? '한도 소진' : null,
+            emb?.enabled ? `임베딩 ${emb.embedded}/${emb.total}${emb.stalled ? ' ⚠' : ''}` : null,
+          ].filter(Boolean).join(' · ')}
+        </span>
+      </span>
+    )
     : '사용 가능한 모델 없음';
 
   return (
