@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - main
+    # Markdown is normally documentation, but plugin/ask/context.md is
+    # shipped inside the image and changes how the assistant answers — a
+    # change there has to rebuild. Documentation still does not.
     paths-ignore:
-      - '**.md'
       - 'docs/**'
+      - '*.md'
+      - 'docs/**/*.md'
   workflow_dispatch:
     inputs:
       tag:
