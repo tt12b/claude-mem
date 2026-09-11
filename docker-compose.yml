@@ -230,6 +230,28 @@ services:
       # provider/API secrets out of the inline environment.
       # - ${CREDENTIALS_FILE:-./.docker-credentials}:/run/secrets/claude-mem-credentials:ro
 
+  # Binding the server to one interface (CLAUDE_MEM_BIND_ADDRESS) also takes
+  # localhost away from the machine actually running it: the dashboard is
+  # then only reachable at that address, from the host itself included.
+  #
+  # This forwards loopback to the server so the host can still open its own
+  # dashboard. Loopback is not reachable from any other machine, so it does
+  # not widen what CLAUDE_MEM_BIND_ADDRESS allows.
+  #
+  # It cannot be a second `ports:` entry on the server: 0.0.0.0 and 127.0.0.1
+  # cannot both hold the port, so the default (all interfaces) would refuse
+  # to start. A profile keeps it off unless asked for — in .env:
+  #   COMPOSE_PROFILES=loopback
+  claude-mem-loopback:
+    profiles: ["loopback"]
+    image: alpine/socat:latest
+    restart: unless-stopped
+    depends_on:
+      - claude-mem-server
+    ports:
+      - "127.0.0.1:37877:37877"
+    command: TCP-LISTEN:37877,fork,reuseaddr TCP:claude-mem-server:37877
+
 volumes:
   claude-mem-data:
   postgres-data:
