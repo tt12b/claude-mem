@@ -21,6 +21,14 @@ class CapturingClient implements PostgresQueryable {
   }
 }
 
+class CountingClient implements PostgresQueryable {
+  constructor(private readonly row: Record<string, unknown>) {}
+
+  async query<T extends QueryResultRow = QueryResultRow>(): Promise<QueryResult<T>> {
+    return { command: 'SELECT', rowCount: 1, oid: 0, fields: [], rows: [this.row as T] };
+  }
+}
+
 const vector = Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0.1);
 
 afterEach(() => {
@@ -133,5 +141,53 @@ describe('embedding backfill queries', () => {
 
     expect(written).toBe(0);
     expect(client.calls).toHaveLength(0);
+  });
+});
+
+describe('embedding status query', () => {
+  it('reports progress and the last write time together', async () => {
+    // The count alone cannot tell "all done" from "died with a gap", which
+    // is exactly the failure that went unnoticed; the timestamp is what
+    // separates them.
+    const client = new CapturingClient();
+    await new PostgresObservationRepository(client).embeddingStats();
+
+    const [call] = client.calls;
+    expect(call.text).toContain('FILTER (WHERE embedding_vector IS NOT NULL)');
+    expect(call.text).toContain('max(embedded_at)');
+  });
+
+  it('coerces Postgres bigint counts, which arrive as strings', async () => {
+    const client = new CountingClient({ embedded: '12', total: '40', last_embedded_at: null });
+    const stats = await new PostgresObservationRepository(client).embeddingStats();
+
+    expect(stats).toEqual({ embedded: 12, total: 40, lastEmbeddedAtEpoch: null });
+  });
+
+  it('returns the last write as an epoch', async () => {
+    const at = new Date('2026-09-11T01:02:03.000Z');
+    const client = new CountingClient({ embedded: '1', total: '1', last_embedded_at: at });
+    const stats = await new PostgresObservationRepository(client).embeddingStats();
+
+    expect(stats.lastEmbeddedAtEpoch).toBe(at.getTime());
+  });
+
+  it('reads zero from an empty table rather than NaN', async () => {
+    const client = new CapturingClient();
+    expect(await new PostgresObservationRepository(client).embeddingStats())
+      .toEqual({ embedded: 0, total: 0, lastEmbeddedAtEpoch: null });
+  });
+});
+
+describe('setEmbeddings', () => {
+  it('stamps the write time but leaves updated_at alone', async () => {
+    // Filling a vector must not reorder the feed, so updated_at is pinned;
+    // embedded_at exists precisely because of that.
+    const client = new CapturingClient();
+    await new PostgresObservationRepository(client).setEmbeddings([{ id: 'o1', vector: [1] }]);
+
+    const [call] = client.calls;
+    expect(call.text).toContain('embedded_at = now()');
+    expect(call.text).toContain('updated_at = o.updated_at');
   });
 });

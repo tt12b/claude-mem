@@ -1323,6 +1323,59 @@
       color: var(--color-warning, #d29922);
     }
 
+    /* Semantic-search health. A stalled backfill is invisible otherwise:
+       search silently degrades to keywords and nothing looks broken. */
+    .embedding-row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--color-border-primary);
+      font-size: 12px;
+    }
+
+    .embedding-label {
+      color: var(--color-text-muted);
+      white-space: nowrap;
+    }
+
+    .embedding-detail {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+      color: var(--color-text-muted);
+    }
+
+    .embedding-model {
+      font-family: var(--font-mono, monospace);
+      color: var(--color-text-primary);
+    }
+
+    .embedding-count {
+      color: var(--color-text-primary);
+    }
+
+    .embedding-row-ok .embedding-count {
+      color: var(--color-accent-success);
+    }
+
+    .embedding-pending,
+    .embedding-when {
+      color: var(--color-text-muted);
+    }
+
+    .embedding-row-warn .embedding-count,
+    .embedding-warn {
+      color: var(--color-accent-error);
+    }
+
+    .embedding-row-off .embedding-detail {
+      font-style: italic;
+    }
+
     .model-note {
       margin: 10px 0 0;
       font-size: 12px;
@@ -1415,7 +1468,7 @@
     .usage-reasons-block {
       margin-top: 10px;
       padding-top: 8px;
-      border-top: 1px solid var(--color-border);
+      border-top: 1px solid var(--color-border-primary);
     }
 
     .usage-reasons-title {

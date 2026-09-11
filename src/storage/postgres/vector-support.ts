@@ -30,6 +30,7 @@ import type { PostgresQueryable } from './utils.js';
 export const EMBEDDING_DIMENSIONS = 768;
 
 export const EMBEDDING_COLUMN = 'embedding_vector';
+export const EMBEDDED_AT_COLUMN = 'embedded_at';
 
 /**
  * Formats a vector the way pgvector's text input expects: `[1,2,3]`.
@@ -77,6 +78,13 @@ export async function ensureVectorSupport(client: PostgresQueryable): Promise<bo
   try {
     await client.query(
       `ALTER TABLE observations ADD COLUMN IF NOT EXISTS ${EMBEDDING_COLUMN} vector(${EMBEDDING_DIMENSIONS})`
+    );
+    // When the vector was written. `updated_at` cannot answer this — the
+    // backfill deliberately leaves it alone so filling a vector does not
+    // reorder the feed — and without a timestamp there is no way to tell a
+    // backfill that is keeping up from one that died hours ago.
+    await client.query(
+      `ALTER TABLE observations ADD COLUMN IF NOT EXISTS ${EMBEDDED_AT_COLUMN} TIMESTAMPTZ`
     );
   } catch (error) {
     cached = false;

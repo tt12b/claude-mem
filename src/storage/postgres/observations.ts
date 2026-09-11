@@ -13,7 +13,7 @@ import {
 } from './utils.js';
 import { normalizePlatformSourceOrNull } from '../../shared/platform-source.js';
 import { buildSearchTerms } from './search-terms.js';
-import { EMBEDDING_COLUMN, toVectorLiteral, vectorSupport } from './vector-support.js';
+import { EMBEDDED_AT_COLUMN, EMBEDDING_COLUMN, toVectorLiteral, vectorSupport } from './vector-support.js';
 
 /**
  * How far apart two vectors may be and still count as a match. Cosine
@@ -200,6 +200,7 @@ export class PostgresObservationRepository {
       `
         UPDATE observations AS o
         SET ${EMBEDDING_COLUMN} = data.vec::vector,
+            ${EMBEDDED_AT_COLUMN} = now(),
             updated_at = o.updated_at
         FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS vec) AS data
         WHERE o.id = data.id
@@ -207,6 +208,35 @@ export class PostgresObservationRepository {
       [entries.map(e => e.id), entries.map(e => toVectorLiteral(e.vector))]
     );
     return result.rowCount ?? 0;
+  }
+
+  /**
+   * How far the embedding backfill has got.
+   *
+   * `lastEmbeddedAt` is the point of this: a count alone cannot distinguish
+   * "everything is embedded" from "the backfill died and the gap is frozen",
+   * and that distinction is exactly what went unnoticed when the embedding
+   * model 404'd silently for an hour.
+   *
+   * Only valid where pgvector is present — the columns do not exist
+   * otherwise, so callers must check `vectorSupport()` first.
+   */
+  async embeddingStats(): Promise<{ embedded: number; total: number; lastEmbeddedAtEpoch: number | null }> {
+    const result = await this.client.query<{ embedded: string; total: string; last_embedded_at: Date | null }>(
+      `
+        SELECT
+          count(*) FILTER (WHERE ${EMBEDDING_COLUMN} IS NOT NULL) AS embedded,
+          count(*) AS total,
+          max(${EMBEDDED_AT_COLUMN}) AS last_embedded_at
+        FROM observations
+      `
+    );
+    const row = result.rows[0];
+    return {
+      embedded: Number(row?.embedded ?? 0),
+      total: Number(row?.total ?? 0),
+      lastEmbeddedAtEpoch: row?.last_embedded_at ? new Date(row.last_embedded_at).getTime() : null,
+    };
   }
 
   async search(input: {

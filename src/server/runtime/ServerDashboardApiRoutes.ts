@@ -30,6 +30,10 @@ import type { PostgresPool } from '../../storage/postgres/pool.js';
 import { PostgresServerSettingsRepository, PREFERRED_MODEL_KEY } from '../../storage/postgres/server-settings.js';
 import { logger } from '../../utils/logger.js';
 import { QUOTA_TIMEZONE, nextQuotaReset, quotaDayStart } from '../services/quota-day.js';
+import { PostgresObservationRepository } from '../../storage/postgres/observations.js';
+import { vectorSupport } from '../../storage/postgres/vector-support.js';
+import { resolveEmbeddingProvider } from '../generation/embeddings/GeminiEmbeddingProvider.js';
+import { resolveEmbeddingIntervalMs } from '../services/ObservationEmbeddingScheduler.js';
 
 const DEFAULT_LIMIT = 50;
 /**
@@ -358,6 +362,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
     // dashboard can show a week of history while "remaining" must still be
     // measured from the last midnight-Pacific reset.
     const dayStart = quotaDayStart();
+    const embeddings = await this.embeddingStatus();
     const [calls, tokens, active, limits] = await Promise.all([
       this.options.pool.query<{ model: string | null; event_type: string; count: string }>(
         `SELECT details->>'model' AS model, event_type, count(*)::text AS count
@@ -457,6 +462,7 @@ export class ServerDashboardApiRoutes implements RouteHandler {
       quotaDayStartEpoch: dayStart.getTime(),
       quotaResetsAtEpoch: nextQuotaReset().getTime(),
       quotaTimezone: QUOTA_TIMEZONE,
+      embeddings,
       activeModel,
       preferredModel: preferred ?? null,
       models: names.map(name => {
@@ -504,6 +510,67 @@ export class ServerDashboardApiRoutes implements RouteHandler {
         return a.priority - b.priority;
       }),
     });
+  }
+
+  /**
+   * Whether semantic search is actually being kept up to date.
+   *
+   * Reported alongside the models because it fails the same way they do —
+   * a provider says no and the backfill quietly stops — and because that
+   * failure is otherwise invisible: search keeps working on keywords, so
+   * nothing looks broken while new observations stop being searchable by
+   * meaning.
+   */
+  private async embeddingStatus(): Promise<{
+    enabled: boolean;
+    reason: string | null;
+    model: string | null;
+    embedded: number;
+    total: number;
+    pending: number;
+    lastEmbeddedAtEpoch: number | null;
+    stalled: boolean;
+  }> {
+    const off = {
+      enabled: false, model: null, embedded: 0, total: 0,
+      pending: 0, lastEmbeddedAtEpoch: null, stalled: false,
+    };
+    if (vectorSupport() !== true) {
+      return { ...off, reason: 'pgvector_unavailable' };
+    }
+    const provider = resolveEmbeddingProvider();
+    if (!provider) {
+      return { ...off, reason: 'not_configured' };
+    }
+
+    let stats: { embedded: number; total: number; lastEmbeddedAtEpoch: number | null };
+    try {
+      stats = await new PostgresObservationRepository(this.options.pool).embeddingStats();
+    } catch (error) {
+      logger.warn('SYSTEM', 'could not read embedding status', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { ...off, enabled: true, model: provider.label, reason: 'unreadable' };
+    }
+
+    const pending = Math.max(0, stats.total - stats.embedded);
+    // Only a backlog can be stalled. With nothing pending the backfill is
+    // idle by design, however long ago it last ran.
+    const intervalMs = resolveEmbeddingIntervalMs();
+    const graceMs = (intervalMs > 0 ? intervalMs : 5 * 60_000) * 3;
+    const stalled = pending > 0
+      && (stats.lastEmbeddedAtEpoch === null || Date.now() - stats.lastEmbeddedAtEpoch > graceMs);
+
+    return {
+      enabled: true,
+      reason: null,
+      model: provider.label,
+      embedded: stats.embedded,
+      total: stats.total,
+      pending,
+      lastEmbeddedAtEpoch: stats.lastEmbeddedAtEpoch,
+      stalled,
+    };
   }
 
   /**

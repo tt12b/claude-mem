@@ -66,8 +66,12 @@ export function ModelPanel() {
   }
 
   const usable = report.models.filter(m => m.status === 'available' && m.configured);
+  const emb = report.embeddings;
   const summary = `사용 가능 ${usable.length}/${report.models.filter(m => m.configured).length}`
-    + (report.preferredModel ? ` · 선택 ${report.preferredModel}` : '');
+    + (report.preferredModel ? ` · 선택 ${report.preferredModel}` : '')
+    // Folded is the panel's normal state, so the one fact that needs no
+    // unfolding — is semantic search keeping up — belongs in the summary.
+    + (emb?.enabled ? ` · 임베딩 ${emb.embedded}/${emb.total}${emb.stalled ? ' ⚠' : ''}` : '');
 
   return (
     <CollapsiblePanel storageKey="cm.panel.models" title="요약 모델" summary={summary}>
@@ -131,6 +135,8 @@ export function ModelPanel() {
         ))}
       </ul>
 
+      <EmbeddingRow embeddings={report.embeddings} />
+
       <p className="model-note">
         <strong>초록</strong>은 지금 쓸 수 있는 모델, <strong>회색</strong>은 한도가
         소진된 모델, <strong>파랑</strong>은 먼저 시도하도록 고른 모델입니다.
@@ -144,6 +150,57 @@ export function ModelPanel() {
     </div>
     </CollapsiblePanel>
   );
+}
+
+/**
+ * Semantic-search health.
+ *
+ * Shown here rather than in its own panel because it is the same question
+ * the model rows answer — is a provider still saying yes — and because a
+ * second panel is what the operator already asked to stop having.
+ */
+function EmbeddingRow({ embeddings }: { embeddings: ModelReport['embeddings'] }) {
+  if (!embeddings) return null;
+
+  if (!embeddings.enabled) {
+    return (
+      <div className="embedding-row embedding-row-off">
+        <span className="embedding-label">의미 검색</span>
+        <span className="embedding-detail">{offReason(embeddings.reason)} · 키워드 검색만 동작합니다</span>
+      </div>
+    );
+  }
+
+  const done = embeddings.pending === 0;
+  const tone = embeddings.stalled ? 'warn' : (done ? 'ok' : 'busy');
+
+  return (
+    <div className={`embedding-row embedding-row-${tone}`}>
+      <span className="embedding-label">의미 검색</span>
+      <span className="embedding-detail">
+        <span className="embedding-model">{embeddings.model}</span>
+        <span className="embedding-count">{embeddings.embedded.toLocaleString()} / {embeddings.total.toLocaleString()} 임베딩</span>
+        {embeddings.pending > 0 && (
+          <span className="embedding-pending">대기 {embeddings.pending.toLocaleString()}</span>
+        )}
+        {embeddings.lastEmbeddedAtEpoch !== null && (
+          <span className="embedding-when">마지막 {sinceLabel(embeddings.lastEmbeddedAtEpoch)}</span>
+        )}
+        {embeddings.stalled && (
+          <span className="embedding-warn">
+            멈춘 것으로 보입니다 — 로그에서 embedding tick 을 확인하세요
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function offReason(reason: string | null): string {
+  if (reason === 'pgvector_unavailable') return 'pgvector 없음';
+  if (reason === 'not_configured') return 'API 키 없음 또는 비활성';
+  if (reason === 'unreadable') return '상태를 읽지 못함';
+  return '꺼짐';
 }
 
 /**

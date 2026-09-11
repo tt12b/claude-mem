@@ -80,6 +80,20 @@ export interface ModelReport {
   activeModel: string | null;
   /** What the operator asked to try first; differs from active when spent. */
   preferredModel: string | null;
+  /** Semantic-search backfill. Fails silently — search falls back to
+   *  keywords — so its health has to be shown, not inferred. */
+  embeddings: {
+    enabled: boolean;
+    /** Why it is off, when it is: pgvector_unavailable | not_configured | unreadable. */
+    reason: string | null;
+    model: string | null;
+    embedded: number;
+    total: number;
+    pending: number;
+    lastEmbeddedAtEpoch: number | null;
+    /** A backlog that has not moved for several intervals. */
+    stalled: boolean;
+  };
   models: Array<{
     name: string;
     configured: boolean;
